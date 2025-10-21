@@ -97,7 +97,12 @@ class VideoMarkerAndDetector:
         self.object_tracker_manager = ObjectTrackerManager()
         self.detection_triggered = False 
         self.tracking_enabled = False 
-
+        
+        # --- 新增：手动修正模式 ---
+        self.manual_reselect_mode = False # 标记是否处于手动重选状态
+        self.reselect_bbox_start = None   # 鼠标开始点
+        self.reselect_bbox_end = None     # 鼠标结束点
+        
         # --- 颜色检测阈值 (球员/球，请根据视频调整) ---
         self.lower_red1 = np.array([0, 70, 50])
         self.upper_red1 = np.array([10, 255, 255])
@@ -108,9 +113,14 @@ class VideoMarkerAndDetector:
         self.lower_ball = np.array([20, 100, 100]) # 亮黄色
         self.upper_ball = np.array([30, 255, 255])
         
+        #创建窗口并设置鼠标回调
         cv2.namedWindow('Video Marker & Detector')
         cv2.setMouseCallback('Video Marker & Detector', self.mouse_callback)
 
+        #创建颜色调整窗口
+        cv2.namedWindow('Color Adjust',cv2.WINDOW_NORMAL)
+        self._create_trackbars()
+        cv2.setMouseCallback('Video Maker & Detector', self.mouse_callback)
         self._set_initial_frame()
         
     def _set_initial_frame(self):
@@ -123,59 +133,109 @@ class VideoMarkerAndDetector:
 
     # --- 颜色检测和边界框提取 ---
     def _color_detect_initial_targets(self, frame):
-        """
-        在某一帧进行颜色分割和轮廓检测，找到球员和球的初始边界框。
-        返回：[(bbox, label), ...]
-        """
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        results = []
-        
-        # 1. 球场 Mask (排除球场背景)
-        green_mask = cv2.inRange(hsv, self.lower_green, self.upper_green)
-        
-        # 2. 红色队服检测
-        red_mask = cv2.inRange(hsv, self.lower_red1, self.upper_red1) | cv2.inRange(hsv, self.lower_red2, self.upper_red2)
-        # 减去绿色背景
-        red_mask = cv2.subtract(red_mask, green_mask) 
-        
-        # 3. 蓝色队服检测
-        blue_mask = cv2.inRange(hsv, self.lower_blue, self.upper_blue)
-        blue_mask = cv2.subtract(blue_mask, green_mask)
-        
-        # 4. 球检测 
-        ball_mask = cv2.inRange(hsv, self.lower_ball, self.upper_ball)
-        
-        
-        # --- 轮廓检测和边界框提取 ---
-        
-        # 球员轮廓检测 (形态学处理)
-        kernel = np.ones((5, 5), np.uint8)
-        
-        # Red Players
-        red_processed = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel, iterations=1)
-        red_processed = cv2.morphologyEx(red_processed, cv2.MORPH_CLOSE, kernel, iterations=3)
-        self._find_and_append_bboxes(red_processed, 'Red Player', results, min_area=500)
+            """
+            在某一帧进行颜色分割和轮廓检测，找到球员和球的初始边界框，并应用 24 个目标的限制。
+            返回：[(bbox, label), ...]
+            """
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            
+            # 1. 实时获取颜色阈值 (确保使用用户调整后的最新阈值)
+            # 在 _get_hsv_thresholds 中已更新 self.lower_blue/upper_blue
+            
+            # 2. 球场 Mask (排除球场背景)
+            green_mask = cv2.inRange(hsv, self.lower_green, self.upper_green)
+            
+            # 3. 颜色分割 (获取所有潜在目标)
+            red_mask = cv2.inRange(hsv, self.lower_red1, self.upper_red1) | cv2.inRange(hsv, self.lower_red2, self.upper_red2)
+            red_mask = cv2.subtract(red_mask, green_mask) 
+            
+            blue_mask = cv2.inRange(hsv, self.lower_blue, self.upper_blue)
+            blue_mask = cv2.subtract(blue_mask, green_mask)
+            
+            ball_mask = cv2.inRange(hsv, self.lower_ball, self.upper_ball)
+            
+            # --- 轮廓检测和边界框提取 ---
+            all_player_candidates = []
+            all_ball_candidates = []
+            
+            # 球员轮廓检测 (形态学处理)
+            kernel = np.ones((5, 5), np.uint8)
+            
+            # Red Players (最小面积 500)
+            red_processed = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel, iterations=1)
+            red_processed = cv2.morphologyEx(red_processed, cv2.MORPH_CLOSE, kernel, iterations=3)
+            # _find_and_append_bboxes 返回 [(bbox, area)] 列表
+            red_cands = self._find_and_append_bboxes(red_processed, 'Red Player', [], min_area=500, max_area=np.inf)
+            all_player_candidates.extend([(bbox, area, 'Red Player') for bbox, area in red_cands])
 
-        # Blue Players
-        blue_processed = cv2.morphologyEx(blue_mask, cv2.MORPH_OPEN, kernel, iterations=1)
-        blue_processed = cv2.morphologyEx(blue_processed, cv2.MORPH_CLOSE, kernel, iterations=3)
-        self._find_and_append_bboxes(blue_processed, 'Blue Player', results, min_area=500)
+            # Blue Players (最小面积 500)
+            blue_processed = cv2.morphologyEx(blue_mask, cv2.MORPH_OPEN, kernel, iterations=1)
+            blue_processed = cv2.morphologyEx(blue_processed, cv2.MORPH_CLOSE, kernel, iterations=3)
+            blue_cands = self._find_and_append_bboxes(blue_processed, 'Blue Player', [], min_area=500, max_area=np.inf)
+            all_player_candidates.extend([(bbox, area, 'Blue Player') for bbox, area in blue_cands])
 
-        # Ball (使用更小的核和面积)
-        ball_processed = cv2.morphologyEx(ball_mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-        self._find_and_append_bboxes(ball_processed, 'Ball', results, min_area=50, max_area=500)
+            # Ball (最小面积 50, 最大面积 500)
+            ball_processed = cv2.morphologyEx(ball_mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+            ball_cands = self._find_and_append_bboxes(ball_processed, 'Ball', [], min_area=50, max_area=500)
+            all_ball_candidates.extend([(bbox, area, 'Ball') for bbox, area in ball_cands])
 
-        return results
+
+            # --- 4. 限制目标数量（核心逻辑） ---
+            
+            final_targets = []
+            
+            # 4a. 球员/裁判限制：选择面积最大的 23 个目标 (22 球员 + 1 裁判)
+            # 按面积降序排序
+            all_player_candidates.sort(key=lambda x: x[1], reverse=True)
+            
+            # 选取最大的 23 个目标
+            selected_players = all_player_candidates[:23]
+            
+            for bbox, area, label in selected_players:
+                final_targets.append((bbox, label))
+                
+            # 4b. 球限制：选择面积最大的 1 个球 (如果有的话)
+            if all_ball_candidates:
+                # 球的面积通常很小，但可能是多个噪点，选最大的一个
+                all_ball_candidates.sort(key=lambda x: x[1], reverse=True)
+                
+                # 检查这个最大的球边界框是否与任何选定的球员边界框重叠
+                # (避免将球员脚下的亮光误识别为球)
+                is_new_ball = True
+                ball_bbox, _, _ = all_ball_candidates[0]
+                bx, by, bw, bh = ball_bbox
+                
+                # 简单重叠检查 (Jaccard 相似度或简单中心点距离都可以)
+                ball_center = (bx + bw/2, by + bh/2)
+                
+                # 如果球的中心点不在任何球员边界框内，则认为它是合法的球
+                for player_bbox, _, _ in selected_players:
+                    px, py, pw, ph = player_bbox
+                    if px < ball_center[0] < px + pw and py < ball_center[1] < py + ph:
+                        is_new_ball = False
+                        break
+
+                if is_new_ball:
+                    final_targets.append((ball_bbox, 'Ball'))
+
+            print(f"检测到 {len(final_targets)} 个目标 (限制最大 24 个)。")
+            return final_targets
         
     def _find_and_append_bboxes(self, mask, label, results_list, min_area, max_area=np.inf):
-        """辅助函数：查找轮廓并添加到结果列表"""
+        """
+        辅助函数：查找轮廓并返回符合面积要求的边界框列表。
+        不再直接修改 results_list，而是返回 [(bbox, area)] 列表。
+        """
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
+        found_bboxes = []
         for c in contours:
             area = cv2.contourArea(c)
             if area > min_area and area < max_area:
                 x, y, w, h = cv2.boundingRect(c)
-                results_list.append(((x, y, w, h), label))
+                found_bboxes.append(((x, y, w, h), area)) # 返回 bbox 和面积
+                
+        return found_bboxes
 
     # --- 绘制跟踪结果 ---
     def _draw_tracking_results(self, display_frame):
@@ -199,7 +259,6 @@ class VideoMarkerAndDetector:
             # print(f"Frame {self.frame_idx} | ID {obj_id} ({label}): Pixel Pos (x={x}, y={y})")
 
     # --- 核心新增功能：透视变换 ---
-    
     def get_birds_eye_view(self, frame, src_points):
         """
         执行透视变换，将四边形区域转换为矩形俯视图。
@@ -237,7 +296,6 @@ class VideoMarkerAndDetector:
             self.show_birds_eye = False
 
     # --- 视频播放控制和主循环 ---
-    
     def run(self):
         """主循环，处理视频播放和用户输入"""
         print("\n=== 控制台说明 ===")
@@ -246,9 +304,13 @@ class VideoMarkerAndDetector:
         print("- 'm': 切换模式 (manual/auto)")
         print("- 'b': 切换俯视图显示 (Birds-Eye View)")
         print("- 't': 切换跟踪模式 (Tracker ON/OFF)")
+        print("- 'c': 切换手动修正模式 (需暂停)") # 新增按键
         print("- 'q': 退出")
         
         while True:
+            # 1. 实时获取颜色阈值
+            self._get_hsv_thresholds()
+
             if not self.paused:
                 ret, self.frame = self.cap.read()
                 if not ret:
@@ -256,7 +318,7 @@ class VideoMarkerAndDetector:
                 self.frame_idx = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
                 self.set_frame(self.frame)
             
-            # 1. 绘制：根据当前模式进行绘制
+            # 2. 绘制：根据当前模式进行绘制
             display_frame = self.current_frame.copy()
             if self.mode == 'manual':
                 self._update_manual_drawing()
@@ -265,7 +327,7 @@ class VideoMarkerAndDetector:
                 self._draw_auto_detection(display_frame)
                 self._draw_auto_tips(display_frame)
             
-            # 2. 跟踪逻辑
+            # 3. 跟踪逻辑
             if self.tracking_enabled:
                 # 仅在播放或单帧步进（即帧发生变化）时进行跟踪更新
                 if not self.paused or self.frame_idx > self.cap.get(cv2.CAP_PROP_POS_FRAMES) - 1:
@@ -287,6 +349,14 @@ class VideoMarkerAndDetector:
                 
                 # 绘制跟踪结果（无论是否暂停）
                 self._draw_tracking_results(display_frame)
+            
+            # 4. 新增：绘制手动修正时的临时矩形
+            if self.manual_reselect_mode and self.reselect_bbox_start and self.reselect_bbox_end:
+                pt1 = self.reselect_bbox_start
+                pt2 = self.reselect_bbox_end
+                cv2.rectangle(display_frame, pt1, pt2, (255, 255, 0), 2)
+                cv2.putText(display_frame, "Drag to re-select BBox for ID (Check 'Color Adjust' window)", 
+                            (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
             
             cv2.imshow('Video Marker & Detector', display_frame)
             
@@ -346,12 +416,23 @@ class VideoMarkerAndDetector:
                     self.object_tracker_manager.reset()
                     self.detection_triggered = False
                     print("跟踪模式关闭。")
+            
+            elif key == ord('c'): # 切换手动修正模式
+                if self.tracking_enabled:
+                    self.manual_reselect_mode = not self.manual_reselect_mode
+                    if self.manual_reselect_mode:
+                        self.paused = True # 必须暂停才能精确修正
+                        print("进入手动修正模式。请在 'Color Adjust' 窗口设置目标 ID，然后在视频窗口中拖动鼠标绘制新的边界框。")
+                    else:
+                        print("退出手动修正模式。")
+                else:
+                    print("请先按 't' 开启跟踪模式。")
+
 
         self.cap.release()
         cv2.destroyAllWindows()
     
     # --- 帧和状态管理 ---
-
     def set_frame(self, frame):
         """设置当前帧，读取新帧或重置时调用"""
         self.original_frame = frame.copy()
@@ -362,8 +443,9 @@ class VideoMarkerAndDetector:
             self.drawing = False 
 
     # --- 手动标记相关方法（部分省略以保持简洁，使用原先的逻辑） ---
-    
     def mouse_callback(self, event, x, y, flags, param):
+        ''''鼠标回调函数，集成手动标记和手动修正'''
+        #------------1. 手动标记球场-------------------------
         if self.mode != 'manual': return
         if event == cv2.EVENT_LBUTTONDOWN: 
             if len(self.points) < 4:
@@ -374,6 +456,45 @@ class VideoMarkerAndDetector:
             self.points = []
             self.drawing = False
             self.current_frame = self.original_frame.copy()
+    # -------------2. 跟踪手动修正 -------------------------
+        if self.tracking_enabled and self.manual_reselect_mode:
+            if event == cv2.EVENT_LBUTTONDOWN:
+                self.reselect_bbox_start = (x, y)
+                self.reselect_bbox_end = (x, y)
+            elif event == cv2.EVENT_MOUSEMOVE and (flags & cv2.EVENT_FLAG_LBUTTON):
+                self.reselect_bbox_end = (x, y)
+            elif event == cv2.EVENT_LBUTTONUP:
+                # 鼠标抬起，完成绘制，进行修正
+                x1, y1 = self.reselect_bbox_start
+                x2, y2 = self.reselect_bbox_end
+                w = abs(x2 - x1)
+                h = abs(y2 - y1)
+                
+                # Bounding Box: (x, y, w, h)
+                new_bbox = (min(x1, x2), min(y1, y2), w, h)
+                
+                if w > 10 and h > 10: # 确保绘制了一个有效的矩形
+                    target_id = cv2.getTrackbarPos('Target_ID', 'Color Adjust')
+                    
+                    # 查找要修正的跟踪器
+                    if target_id in self.object_tracker_manager.trackers:
+                        # 重新初始化跟踪器
+                        tracker_data = self.object_tracker_manager.trackers[target_id]
+                        tracker = cv2.TrackerCSRT_create() # 重新创建 CSRT 实例
+                        tracker.init(self.frame, new_bbox)
+                        
+                        # 更新管理器中的数据
+                        self.object_tracker_manager.trackers[target_id]['tracker'] = tracker
+                        self.object_tracker_manager.trackers[target_id]['bbox'] = new_bbox
+                        
+                        print(f"成功修正 ID {target_id} 的跟踪框到 {new_bbox}")
+                    else:
+                        print(f"警告：未找到 ID {target_id} 的目标进行修正。")
+
+                self.reselect_bbox_start = None
+                self.reselect_bbox_end = None
+                self.manual_reselect_mode = False # 修正完成后退出模式
+                self.paused = True # 保持暂停状态
 
     def _update_manual_drawing(self):
         self.current_frame = self.original_frame.copy()
@@ -407,7 +528,6 @@ class VideoMarkerAndDetector:
             np.save('quadrilateral_coordinates.npy', np.array(sorted_points))
 
     # --- 自动检测相关方法 ---
-
     def _process_frame_for_green(self, frame):
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(hsv, self.lower_green, self.upper_green)
@@ -447,7 +567,6 @@ class VideoMarkerAndDetector:
         return None
 
     # --- 提示信息绘制 ---
-
     def _draw_manual_tips(self, display_frame):
         cv2.putText(display_frame, f"MODE: MANUAL (M)", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
         cv2.putText(display_frame, "L/R Click: Point/Clear", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
@@ -468,6 +587,37 @@ class VideoMarkerAndDetector:
         cv2.putText(display_frame, f"TRACKER: {'ON' if self.tracking_enabled else 'OFF'} (T)", (w - 300, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255) if self.tracking_enabled else (0, 0, 255), 2)
         cv2.putText(display_frame, f"BIRDS-EYE: {'ON' if self.show_birds_eye else 'OFF'} (B)", (w - 300, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255) if self.show_birds_eye else (255, 255, 255), 2)
 
+    def _create_trackbars(self):
+        """创建用于实时调整颜色的Trackbars"""
+        
+        # 简化演示：只创建一组蓝色队服的 HSV 调整条
+        # 实际应用中，您可能需要为红队和球创建多组或切换机制
+        def on_trackbar(val):
+            pass # 回调函数为空，值直接从 trackbar 获取
+
+        cv2.createTrackbar('H_Min_Blue', 'Color Adjust', self.lower_blue[0], 179, on_trackbar)
+        cv2.createTrackbar('S_Min_Blue', 'Color Adjust', self.lower_blue[1], 255, on_trackbar)
+        cv2.createTrackbar('V_Min_Blue', 'Color Adjust', self.lower_blue[2], 255, on_trackbar)
+        cv2.createTrackbar('H_Max_Blue', 'Color Adjust', self.upper_blue[0], 179, on_trackbar)
+        cv2.createTrackbar('S_Max_Blue', 'Color Adjust', self.upper_blue[1], 255, on_trackbar)
+        cv2.createTrackbar('V_Max_Blue', 'Color Adjust', self.upper_blue[2], 255, on_trackbar)
+        
+        # 为了演示手动修正，添加一个用于选择目标的 Trackbar
+        cv2.createTrackbar('Target_ID', 'Color Adjust', 0, 100, on_trackbar)
+        print("\n**提示：开启跟踪模式后，使用 'Color Adjust' 窗口的 Trackbar 调整颜色阈值。**")
+
+    def _get_hsv_thresholds(self):
+        """从Trackbars读取当前的HSV阈值"""
+        h_min = cv2.getTrackbarPos('H_Min_Blue', 'Color Adjust')
+        s_min = cv2.getTrackbarPos('S_Min_Blue', 'Color Adjust')
+        v_min = cv2.getTrackbarPos('V_Min_Blue', 'Color Adjust')
+        h_max = cv2.getTrackbarPos('H_Max_Blue', 'Color Adjust')
+        s_max = cv2.getTrackbarPos('S_Max_Blue', 'Color Adjust')
+        v_max = cv2.getTrackbarPos('V_Max_Blue', 'Color Adjust')
+        
+        # 实时更新蓝色阈值
+        self.lower_blue = np.array([h_min, s_min, v_min])
+        self.upper_blue = np.array([h_max, s_max, v_max])
 
 # 示例使用
 if __name__ == "__main__":
