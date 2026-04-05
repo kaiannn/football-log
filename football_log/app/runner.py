@@ -12,6 +12,7 @@ from football_log.vision.team_classifier import TeamClassifier
 from football_log.vision.tracker import YoloByteTrackTracker
 from football_log.world.homography import Homography, project_foot_to_world
 from football_log.world.pitch_model import PitchSpec
+from football_log.world.pinhole_ground import PinholeGroundProjector, load_pinhole_ground_projector
 
 
 def _load_homography(path: Optional[str]) -> Optional[Homography]:
@@ -23,13 +24,20 @@ def _load_homography(path: Optional[str]) -> Optional[Homography]:
     return Homography(arr)
 
 
-def _enrich_world_coords(objs: List[Dict[str, Any]], H: Optional[Homography]) -> List[Dict[str, Any]]:
-    if H is None:
+def _enrich_world_coords(
+    objs: List[Dict[str, Any]],
+    H: Optional[Homography],
+    pinhole: Optional[PinholeGroundProjector],
+) -> List[Dict[str, Any]]:
+    if pinhole is None and H is None:
         return objs
     out: List[Dict[str, Any]] = []
     for o in objs:
         row = dict(o)
-        wx, wy = project_foot_to_world(o["bbox"], o["label"], H)
+        if pinhole is not None:
+            wx, wy = pinhole.project_foot_to_world(o["bbox"], o["label"])
+        else:
+            wx, wy = project_foot_to_world(o["bbox"], o["label"], H)
         row["world_x_m"] = wx
         row["world_y_m"] = wy
         out.append(row)
@@ -49,6 +57,7 @@ class VideoTrackerPipeline:
         show_ui: bool = True,
         tracker: str = "bytetrack.yaml",
         homography_path: Optional[str] = None,
+        camera_calib_path: Optional[str] = None,
         pitch: Optional[PitchSpec] = None,
     ):
         self.video_path = video_path
@@ -71,14 +80,22 @@ class VideoTrackerPipeline:
             tracker=tracker,
         )
         self.H = _load_homography(homography_path)
+        self.pinhole: Optional[PinholeGroundProjector] = None
+        if camera_calib_path:
+            self.pinhole = load_pinhole_ground_projector(camera_calib_path)
         self.pitch = pitch or PitchSpec()
 
         stem = os.path.splitext(os.path.basename(self.video_path))[0]
+        world_on = self.pinhole is not None or self.H is not None
         extra_meta = {
             "pitch_length_m": self.pitch.length_m,
             "pitch_width_m": self.pitch.width_m,
             "homography_path": homography_path,
-            "world_coords_enabled": self.H is not None,
+            "camera_calib_path": camera_calib_path,
+            "world_coords_method": "pinhole_ground"
+            if self.pinhole is not None
+            else ("homography" if self.H is not None else None),
+            "world_coords_enabled": world_on,
         }
         self.data_writer = TrackingDataWriter(
             output_dir=output_dir,
@@ -93,7 +110,11 @@ class VideoTrackerPipeline:
         m = self.yolo_tracker.model
         ckpt = getattr(m, "ckpt_path", None) or getattr(m, "model_name", "yolo")
         print(f"Track pipeline: model={ckpt}, tracker={self.yolo_tracker.tracker}, detect_every_n={self.detect_every_n}")
-        print(f"Output dir: {self.data_writer.output_dir}, world coords: {self.H is not None}")
+        print(
+            f"Output dir: {self.data_writer.output_dir}, world coords: "
+            f"{self.pinhole is not None or self.H is not None} "
+            f"({'pinhole' if self.pinhole is not None else 'homography' if self.H is not None else 'off'})"
+        )
 
         while True:
             ret, frame = self.cap.read()
@@ -105,7 +126,7 @@ class VideoTrackerPipeline:
             if should_detect:
                 self.last_tracked_objects = self.yolo_tracker.track_frame(frame, self.team_classifier)
 
-            current = _enrich_world_coords(self.last_tracked_objects, self.H)
+            current = _enrich_world_coords(self.last_tracked_objects, self.H, self.pinhole)
             self.data_writer.write_frame(self.frame_idx, current)
 
             if self.show_ui:

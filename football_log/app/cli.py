@@ -23,6 +23,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="3×3 单应矩阵 .npy 路径（像素→世界米）；未提供则 world_x/y 为空",
     )
+    p.add_argument(
+        "--camera-calib",
+        default=None,
+        help="针孔+地面平面标定 JSON/YAML（K、dist、R|t 或 R|C、可选 ground_plane）；"
+        "若与 --homography 同时给出，优先使用针孔求交",
+    )
     p.add_argument("--pitch-length-m", type=float, default=105.0, help="球场长度（米），写入 meta")
     p.add_argument("--pitch-width-m", type=float, default=68.0, help="球场宽度（米），写入 meta")
     return p
@@ -47,6 +53,7 @@ def main() -> None:
         show_ui=not args.no_ui,
         tracker=args.tracker,
         homography_path=args.homography,
+        camera_calib_path=args.camera_calib,
         pitch=pitch,
     )
     pipeline.run()
