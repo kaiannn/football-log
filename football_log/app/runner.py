@@ -7,7 +7,10 @@ import cv2
 import numpy as np
 
 from football_log.io.export import TrackingDataWriter
-from football_log.ui.overlay import draw_frame_hud, draw_tracking_overlay
+from football_log.pitch.field_estimator import PitchFieldEstimator, TemporalPitchSmoother
+from football_log.pitch.integration import filter_objects_in_grass_mask
+from football_log.pitch.observation import PitchObservation
+from football_log.ui.overlay import draw_frame_hud, draw_pitch_observation, draw_tracking_overlay
 from football_log.vision.team_classifier import TeamClassifier
 from football_log.vision.tracker import YoloByteTrackTracker
 from football_log.world.homography import Homography, project_foot_to_world
@@ -59,6 +62,10 @@ class VideoTrackerPipeline:
         homography_path: Optional[str] = None,
         camera_calib_path: Optional[str] = None,
         pitch: Optional[PitchSpec] = None,
+        pitch_field_detect: bool = False,
+        pitch_field_every_n: int = 15,
+        pitch_field_temporal_smooth: bool = True,
+        pitch_field_filter_tracks: bool = False,
     ):
         self.video_path = video_path
         self.cap = cv2.VideoCapture(video_path)
@@ -85,6 +92,17 @@ class VideoTrackerPipeline:
             self.pinhole = load_pinhole_ground_projector(camera_calib_path)
         self.pitch = pitch or PitchSpec()
 
+        self.pitch_field_detect = bool(pitch_field_detect)
+        self.pitch_field_every_n = max(1, int(pitch_field_every_n))
+        self._pitch_estimator: Optional[PitchFieldEstimator] = (
+            PitchFieldEstimator() if self.pitch_field_detect else None
+        )
+        self._pitch_smoother: Optional[TemporalPitchSmoother] = (
+            TemporalPitchSmoother() if (self.pitch_field_detect and pitch_field_temporal_smooth) else None
+        )
+        self._last_pitch_obs: Optional[PitchObservation] = None
+        self.pitch_field_filter_tracks = bool(pitch_field_filter_tracks)
+
         stem = os.path.splitext(os.path.basename(self.video_path))[0]
         world_on = self.pinhole is not None or self.H is not None
         extra_meta = {
@@ -96,6 +114,9 @@ class VideoTrackerPipeline:
             if self.pinhole is not None
             else ("homography" if self.H is not None else None),
             "world_coords_enabled": world_on,
+            "pitch_field_detect": self.pitch_field_detect,
+            "pitch_field_every_n": self.pitch_field_every_n,
+            "pitch_field_filter_tracks": self.pitch_field_filter_tracks,
         }
         self.data_writer = TrackingDataWriter(
             output_dir=output_dir,
@@ -113,7 +134,8 @@ class VideoTrackerPipeline:
         print(
             f"Output dir: {self.data_writer.output_dir}, world coords: "
             f"{self.pinhole is not None or self.H is not None} "
-            f"({'pinhole' if self.pinhole is not None else 'homography' if self.H is not None else 'off'})"
+            f"({'pinhole' if self.pinhole is not None else 'homography' if self.H is not None else 'off'}), "
+            f"pitch field: {self.pitch_field_detect}"
         )
 
         while True:
@@ -126,11 +148,23 @@ class VideoTrackerPipeline:
             if should_detect:
                 self.last_tracked_objects = self.yolo_tracker.track_frame(frame, self.team_classifier)
 
-            current = _enrich_world_coords(self.last_tracked_objects, self.H, self.pinhole)
+            tracked = self.last_tracked_objects
+            if self.pitch_field_detect and self._pitch_estimator is not None:
+                if self.frame_idx % self.pitch_field_every_n == 0 or self._last_pitch_obs is None:
+                    obs = self._pitch_estimator.estimate(frame)
+                    if self._pitch_smoother is not None:
+                        obs = self._pitch_smoother.smooth(obs)
+                    self._last_pitch_obs = obs
+                if self.pitch_field_filter_tracks and self._last_pitch_obs is not None:
+                    tracked = filter_objects_in_grass_mask(tracked, self._last_pitch_obs.grass_mask)
+
+            current = _enrich_world_coords(tracked, self.H, self.pinhole)
             self.data_writer.write_frame(self.frame_idx, current)
 
             if self.show_ui:
                 display = frame.copy()
+                if self.pitch_field_detect and self._last_pitch_obs is not None:
+                    draw_pitch_observation(display, self._last_pitch_obs)
                 draw_tracking_overlay(display, current)
                 draw_frame_hud(display, self.frame_idx, self.detect_every_n)
                 cv2.imshow("Video Tracker", display)

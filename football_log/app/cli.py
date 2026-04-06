@@ -31,6 +31,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--pitch-length-m", type=float, default=105.0, help="球场长度（米），写入 meta")
     p.add_argument("--pitch-width-m", type=float, default=68.0, help="球场宽度（米），写入 meta")
+    p.add_argument(
+        "--pitch-field-detect",
+        action="store_true",
+        help="启用草地+场线+四边形估计（OpenCV，CPU 可部署）；与 SoccerNet 系场线/标定思路一致",
+    )
+    p.add_argument(
+        "--pitch-field-every-n",
+        type=int,
+        default=15,
+        help="每 N 帧更新一次场地估计（其余帧复用上一结果），默认 15",
+    )
+    p.add_argument(
+        "--pitch-field-filter-tracks",
+        action="store_true",
+        help="用草地掩膜过滤锚点不在草皮上的目标（球员脚底/球心）",
+    )
     return p
 
 
@@ -55,6 +71,9 @@ def main() -> None:
         homography_path=args.homography,
         camera_calib_path=args.camera_calib,
         pitch=pitch,
+        pitch_field_detect=args.pitch_field_detect,
+        pitch_field_every_n=args.pitch_field_every_n,
+        pitch_field_filter_tracks=args.pitch_field_filter_tracks,
     )
     pipeline.run()
 

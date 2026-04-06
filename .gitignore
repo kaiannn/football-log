@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+env/
+
+# Outputs & local artifacts
+outputs/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Ultralytics / weights (optional: remove next line if you want to commit .pt)
+*.pt
