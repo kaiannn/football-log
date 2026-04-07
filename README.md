@@ -76,6 +76,58 @@ python3 -m football_log.app.cli --video "/path/to/match.mp4" --no-ui \
 python3 -m football_log.app.cli --video "/path/to/match.mp4"
 ```
 
+### 启发式标定物拟合（多帧/多参考 + 鲁棒）
+
+当你手里的 `homography.npy` 有尺度偏差时，可用已知尺寸矩形做联合拟合。当前支持：
+
+- 交互式：在**多帧**逐帧点击 4 点；
+- 文件式：从 `refs-json` 读入多个参考；
+- 鲁棒损失：`none` / `huber` / `cauchy`，降低坏点影响。
+
+示例（多帧交互）：
+
+```bash
+python3 -m football_log.app.calibrate_reference \
+  --video "/path/to/match.mp4" \
+  --homography "/path/to/homography.npy" \
+  --frame-idxs 100,220,360 \
+  --ref-width-m 2.00 \
+  --ref-length-m 1.00 \
+  --robust-loss huber \
+  --robust-delta-m 0.2 \
+  --out-homography "/path/to/homography_refit.npy"
+```
+
+交互方式：左键点 4 个角（大致 tl,tr,br,bl），`Enter` 确认，`r` 重选，`q` 退出。
+
+`refs-json` 示例：
+
+```json
+[
+  {
+    "image_points_xy": [[100, 200], [220, 205], [225, 260], [95, 255]],
+    "width_m": 2.0,
+    "length_m": 1.0
+  },
+  {
+    "image_points_xy": [[130, 210], [252, 214], [256, 270], [126, 266]],
+    "width_m": 2.0,
+    "length_m": 1.0
+  }
+]
+```
+
+```bash
+python3 -m football_log.app.calibrate_reference \
+  --video "/path/to/match.mp4" \
+  --homography "/path/to/homography.npy" \
+  --refs-json "/path/to/refs.json" \
+  --robust-loss cauchy \
+  --out-homography "/path/to/homography_refit.npy"
+```
+
+> 注：当前为工程化启发式（坐标下降 + 衰减步长）用于快速修正尺度，后续会替换为更高精度方法。
+
 ### 环境与依赖
 
 - Python 3.9+ 建议；需安装 `requirements.txt`（`opencv-python`、`numpy`、`ultralytics`、`pyyaml`）。

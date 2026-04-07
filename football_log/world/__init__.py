@@ -7,6 +7,14 @@ from football_log.world.pinhole_ground import (
     PinholeGroundProjector,
     load_pinhole_ground_projector,
 )
+from football_log.world.heuristic_reference_fit import (
+    MultiScaleFitResult,
+    ReferenceRectangle,
+    ScaleFitResult,
+    apply_scales_to_homography,
+    fit_reference_scales,
+    fit_reference_scales_multi,
+)
 
 __all__ = [
     "PitchSpec",
@@ -16,4 +24,10 @@ __all__ = [
     "GroundPlane",
     "PinholeGroundProjector",
     "load_pinhole_ground_projector",
+    "ReferenceRectangle",
+    "ScaleFitResult",
+    "MultiScaleFitResult",
+    "fit_reference_scales",
+    "fit_reference_scales_multi",
+    "apply_scales_to_homography",
 ]
