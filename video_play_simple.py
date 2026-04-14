@@ -1,7 +1,7 @@
 import cv2
 #mp4播放
-path = "/Users/kai/Downloads/3d模型/ecc7c86352f76011ea88a7f7ff54c61f.mp4"
-cap = cv2.VideoCapture(path)  # replace with your video path
+path = "path/to/match.mp4"
+cap = cv2.VideoCapture(path)
 
 if not cap.isOpened():
     print("Error: cannot open video")

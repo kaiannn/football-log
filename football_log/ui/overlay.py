@@ -50,11 +50,26 @@ def draw_pitch_observation(
     )
 
 
+_LABEL_COLORS = {
+    "Team A": (0, 0, 255),
+    "Team B": (255, 0, 0),
+    "Ball": (0, 200, 200),
+    "Player": (180, 180, 180),
+}
+
+
+def _label_color(label: str) -> tuple:
+    for key, color in _LABEL_COLORS.items():
+        if key in label:
+            return color
+    return (0, 255, 255)
+
+
 def draw_tracking_overlay(frame, tracked_objects: List[Dict[str, Any]]) -> None:
     for obj in tracked_objects:
         x, y, w, h = [int(v) for v in obj["bbox"]]
         label = obj["label"]
-        color = (0, 0, 255) if "Red" in label else (255, 0, 0) if "Blue" in label else (0, 255, 255)
+        color = _label_color(label)
         cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
         conf = obj.get("conf", 0)
         cv2.putText(

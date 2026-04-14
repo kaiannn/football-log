@@ -43,7 +43,7 @@ def _select_points(frame: np.ndarray) -> np.ndarray:
             pts.clear()
         if k == ord("q"):
             cv2.destroyWindow(win)
-            raise SystemExit("用户取消")
+            raise SystemExit("已取消")
     cv2.destroyWindow(win)
     return np.asarray(pts, dtype=np.float64).reshape(4, 2)
 

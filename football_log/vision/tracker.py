@@ -72,8 +72,6 @@ class YoloByteTrackTracker:
                 label = "Ball"
             else:
                 instant = team_classifier.instant_label(frame, bbox)
-                if instant == "Unknown Player":
-                    continue
                 label = team_classifier.smooth_label(track_id, instant)
 
             tracked.append({"id": track_id, "bbox": bbox, "label": label, "conf": conf})

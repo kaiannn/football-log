@@ -206,11 +206,11 @@ if __name__ == "__main__":
     marker = QuadrilateralMarker()
     
     # 方式1: 在视频帧上标记
-    path = "/Users/kai/Downloads/3d模型/ecc7c86352f76011ea88a7f7ff54c61f.mp4"
+    path = "path/to/match.mp4"
     marker.mark_video_frame(path)
     
     # 方式2: 在图片上标记
-    points = marker.mark_image('your_image.jpg')
+    points = marker.mark_image('sample_image.jpg')
     
     if points:
         print("最终四边形坐标:")

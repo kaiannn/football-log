@@ -21,7 +21,7 @@ def _order_tl_tr_br_bl(pts: np.ndarray) -> np.ndarray:
 
 @dataclass(frozen=True)
 class ReferenceRectangle:
-    """用户在图像中点击的 4 点 + 标定物真实宽长（米）。"""
+    """在图像中点击的 4 点 + 标定物真实宽长（米）。"""
 
     image_points_xy: np.ndarray  # (4,2), roughly tl,tr,br,bl
     width_m: float
@@ -122,8 +122,7 @@ def fit_reference_scales_multi(
     """
     多标定物/多帧联合拟合 (sx, sy)。
 
-    目标: 对每个 ref 产生 (宽误差, 长误差) 两个残差，最小化鲁棒损失和。
-    TODO(next): 后续可升级为更高精度全局优化（联合平移/旋转/针孔外参微调）。
+    对每个 ref 产生 (宽误差, 长误差) 两个残差，最小化鲁棒损失和。
     """
     if not refs:
         raise ValueError("refs must not be empty")

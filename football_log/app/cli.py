@@ -47,7 +47,28 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="用草地掩膜过滤锚点不在草皮上的目标（球员脚底/球心）",
     )
+    p.add_argument(
+        "--team-colors",
+        default=None,
+        help="手动指定两队 BGR 颜色，格式 'B,G,R;B,G,R'，如 '255,255,255;0,255,255'（白 vs 黄）；"
+        "未提供则自动 K-Means 聚类",
+    )
     return p
+
+
+def _parse_team_colors(raw: str):
+    if not raw:
+        return None
+    parts = raw.strip().split(";")
+    if len(parts) < 2:
+        raise SystemExit("--team-colors 需要两组 BGR，用分号分隔，如 '255,255,255;0,255,255'")
+    colors = []
+    for p in parts[:2]:
+        nums = [int(x.strip()) for x in p.split(",")]
+        if len(nums) != 3:
+            raise SystemExit(f"BGR 颜色需要 3 个整数，得到: {p}")
+        colors.append(tuple(nums))
+    return colors
 
 
 def main() -> None:
@@ -57,6 +78,8 @@ def main() -> None:
 
     pitch = PitchSpec(length_m=args.pitch_length_m, width_m=args.pitch_width_m)
     pitch.validate()
+
+    team_colors = _parse_team_colors(args.team_colors)
 
     pipeline = VideoTrackerPipeline(
         video_path=args.video,
@@ -74,6 +97,7 @@ def main() -> None:
         pitch_field_detect=args.pitch_field_detect,
         pitch_field_every_n=args.pitch_field_every_n,
         pitch_field_filter_tracks=args.pitch_field_filter_tracks,
+        team_colors=team_colors,
     )
     pipeline.run()
 

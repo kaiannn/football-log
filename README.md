@@ -8,7 +8,7 @@
 football-log/
 ├── football_log/
 │   ├── app/            # CLI、视频流水线 VideoTrackerPipeline
-│   ├── vision/         # YOLO 跟踪、HSV 分队与时序平滑
+│   ├── vision/         # YOLO 跟踪、LAB K-Means 自动分队与时序平滑
 │   ├── pitch/          # 场地：草地/场线/四边形（OpenCV，可选）
 │   ├── world/          # PitchSpec、单应 Homography、针孔+地面 PinholeGroundProjector
 │   ├── io/             # JSONL/CSV、meta
@@ -24,7 +24,7 @@ football-log/
 
 ---
 
-## 跑通「整条流水线」：你需要提供什么？
+## 跑通「整条流水线」：需要提供什么？
 
 ### 必须（缺一不可）
 
@@ -78,7 +78,7 @@ python3 -m football_log.app.cli --video "/path/to/match.mp4"
 
 ### 启发式标定物拟合（多帧/多参考 + 鲁棒）
 
-当你手里的 `homography.npy` 有尺度偏差时，可用已知尺寸矩形做联合拟合。当前支持：
+当已有的 `homography.npy` 存在尺度偏差时，可用已知尺寸矩形做联合拟合。当前支持：
 
 - 交互式：在**多帧**逐帧点击 4 点；
 - 文件式：从 `refs-json` 读入多个参考；
@@ -179,7 +179,7 @@ pip install -r requirements.txt
 
 - 跟踪为 YOLO `track` + ByteTrack（默认）；性能不足时可试 `--detect-every-n 2` 或 `3`。
 - 世界坐标依赖标定质量；单应与 `PitchSpec` 的世界轴约定需与标定时选点一致。
-- 球衣分队为 HSV 粗分类 + 时序平滑，光照/队服变化大时需调参或换方案。
+- 球衣分队为 LAB 色度 K-Means 自动聚类 + 时序平滑，也可通过 `--team-colors` 手动指定两队 BGR 颜色。
 
 ---
 

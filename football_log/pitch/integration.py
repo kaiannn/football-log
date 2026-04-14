@@ -6,12 +6,12 @@ from typing import Any, Dict, List, Tuple
 
 import numpy as np
 
-from football_log.world.homography import bbox_foot_point
+from football_log.world.homography import bbox_foot_point, is_person_label
 
 
 def bbox_anchor_pixel(bbox: tuple, label: str) -> Tuple[int, int]:
     """与 project_foot_to_world 一致：球员脚底中点，球用框中心。"""
-    if "Player" in label:
+    if is_person_label(label):
         u, v = bbox_foot_point(bbox)
     else:
         x, y, w, h = bbox

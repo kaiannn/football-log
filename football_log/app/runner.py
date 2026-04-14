@@ -66,6 +66,7 @@ class VideoTrackerPipeline:
         pitch_field_every_n: int = 15,
         pitch_field_temporal_smooth: bool = True,
         pitch_field_filter_tracks: bool = False,
+        team_colors: Optional[List[tuple]] = None,
     ):
         self.video_path = video_path
         self.cap = cv2.VideoCapture(video_path)
@@ -79,7 +80,7 @@ class VideoTrackerPipeline:
         self.frame_idx = 0
         self.last_tracked_objects: List[Dict[str, Any]] = []
 
-        self.team_classifier = TeamClassifier()
+        self.team_classifier = TeamClassifier(team_colors=team_colors)
         self.yolo_tracker = YoloByteTrackTracker(
             model_name=model_name,
             conf=conf,
@@ -142,7 +143,6 @@ class VideoTrackerPipeline:
             ret, frame = self.cap.read()
             if not ret:
                 break
-            self.frame_idx = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
 
             should_detect = (self.frame_idx % self.detect_every_n == 0) or not self.last_tracked_objects
             if should_detect:
@@ -171,6 +171,8 @@ class VideoTrackerPipeline:
                 key = cv2.waitKey(self.delay) & 0xFF
                 if key == ord("q"):
                     break
+
+            self.frame_idx += 1
 
         self.cap.release()
         self.data_writer.close()

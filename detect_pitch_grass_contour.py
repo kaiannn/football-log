@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 
-video_path = "/Users/kai/Downloads/3d模型/output.mp4"
+video_path = "path/to/match.mp4"
 cap = cv2.VideoCapture(video_path)
 
 # HSV 范围 - 可调（草地偏亮就调高 V）

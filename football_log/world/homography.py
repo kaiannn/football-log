@@ -47,6 +47,10 @@ def bbox_foot_point(bbox: Tuple[float, float, float, float]) -> Tuple[float, flo
     return float(x + 0.5 * w), float(y + h)
 
 
+def is_person_label(label: str) -> bool:
+    return "Player" in label or "Team" in label
+
+
 def project_foot_to_world(
     bbox: Tuple[float, float, float, float],
     label: str,
@@ -58,9 +62,9 @@ def project_foot_to_world(
     """
     if H is None:
         return None, None
-    if "Player" not in label and label != "Ball":
+    if not is_person_label(label) and label != "Ball":
         return None, None
-    u, v = bbox_foot_point(bbox) if "Player" in label else (
+    u, v = bbox_foot_point(bbox) if is_person_label(label) else (
         float(bbox[0] + 0.5 * bbox[2]),
         float(bbox[1] + 0.5 * bbox[3]),
     )
