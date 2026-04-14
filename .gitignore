@@ -9,6 +9,7 @@ env/
 
 # Outputs & local artifacts
 outputs/
+test_videos/
 
 # IDE / OS
 .idea/

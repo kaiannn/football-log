@@ -7,20 +7,24 @@
 ```
 football-log/
 ├── football_log/
-│   ├── app/            # CLI、视频流水线 VideoTrackerPipeline
+│   ├── app/            # CLI、Web UI、视频流水线 VideoTrackerPipeline
 │   ├── vision/         # YOLO 跟踪、LAB K-Means 自动分队与时序平滑
 │   ├── pitch/          # 场地：草地/场线/四边形（OpenCV，可选）
 │   ├── world/          # PitchSpec、单应 Homography、针孔+地面 PinholeGroundProjector
 │   ├── io/             # JSONL/CSV、meta
 │   └── ui/             # OpenCV 叠加绘制
-├── run.py                # 入口，等价于 python3 -m football_log.app.cli
+├── run.py                # CLI 入口
+├── run_web.py            # Web UI 入口（Gradio）
 ├── requirements.txt
 └── README.md
 ```
 
 根目录下 `mark_pitch_quadrilateral.py`、`detect_pitch_grass_contour.py`、`video_*.py`、`opencv_smoke_test.py` 等为**独立实验脚本**，不参与主包 import。
 
-**推荐入口：** `python3 -m football_log.app.cli` 或 `python3 run.py`。
+**推荐入口：**
+
+- **Web UI（推荐）：** `python3 run_web.py`，浏览器打开 `http://localhost:7860`
+- **CLI：** `python3 run.py` 或 `python3 -m football_log.app.cli`
 
 ---
 
@@ -130,7 +134,7 @@ python3 -m football_log.app.calibrate_reference \
 
 ### 环境与依赖
 
-- Python 3.9+ 建议；需安装 `requirements.txt`（`opencv-python`、`numpy`、`ultralytics`、`pyyaml`）。
+- Python 3.9+ 建议；需安装 `requirements.txt`（`opencv-python`、`numpy`、`ultralytics`、`pyyaml`、`gradio`）。
 - 首次使用 YOLO 需联网下载权重（或使用已下载的 `.pt` 路径）。
 
 ---

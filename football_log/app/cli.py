@@ -9,7 +9,7 @@ from football_log.world.pitch_model import PitchSpec
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Football tracking pipeline (YOLO track + structured export).")
-    p.add_argument("--video", required=True, help="输入视频路径")
+    p.add_argument("--video", required=True, help="输入视频路径，或 'cam' / 'cam:0' 使用摄像头")
     p.add_argument("--output-dir", default="outputs", help="输出目录，默认 outputs")
     p.add_argument("--output-format", default="both", choices=["jsonl", "csv", "both"], help="输出格式")
     p.add_argument("--model", default="yolov8n.pt", help="YOLO 模型权重")
@@ -73,7 +73,7 @@ def _parse_team_colors(raw: str):
 
 def main() -> None:
     args = build_parser().parse_args()
-    if not os.path.exists(args.video):
+    if not args.video.startswith("cam") and not os.path.exists(args.video):
         raise SystemExit(f"视频文件不存在: {args.video}")
 
     pitch = PitchSpec(length_m=args.pitch_length_m, width_m=args.pitch_width_m)

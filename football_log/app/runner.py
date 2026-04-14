@@ -1,6 +1,7 @@
-"""视频读取 → 跟踪 → 可选世界坐标 → 导出。"""
+"""视频/摄像头读取 → 跟踪 → 可选世界坐标 → 导出。"""
 
 import os
+import time
 from typing import Any, Dict, List, Optional
 
 import cv2
@@ -16,6 +17,14 @@ from football_log.vision.tracker import YoloByteTrackTracker
 from football_log.world.homography import Homography, project_foot_to_world
 from football_log.world.pitch_model import PitchSpec
 from football_log.world.pinhole_ground import PinholeGroundProjector, load_pinhole_ground_projector
+
+
+def _parse_video_source(source: str):
+    if source.startswith("cam"):
+        parts = source.split(":")
+        device_id = int(parts[1]) if len(parts) > 1 else 0
+        return device_id, True
+    return source, False
 
 
 def _load_homography(path: Optional[str]) -> Optional[Homography]:
@@ -69,16 +78,24 @@ class VideoTrackerPipeline:
         team_colors: Optional[List[tuple]] = None,
     ):
         self.video_path = video_path
-        self.cap = cv2.VideoCapture(video_path)
+        source, self.is_camera = _parse_video_source(video_path)
+        self.cap = cv2.VideoCapture(source)
         if not self.cap.isOpened():
-            raise SystemExit("无法打开视频文件")
+            kind = "摄像头" if self.is_camera else "视频文件"
+            raise SystemExit(f"无法打开{kind}: {video_path}")
 
-        self.fps = self.cap.get(cv2.CAP_PROP_FPS) or 25
+        if self.is_camera:
+            self.fps = self.cap.get(cv2.CAP_PROP_FPS)
+            if not self.fps or self.fps <= 0:
+                self.fps = 30.0
+        else:
+            self.fps = self.cap.get(cv2.CAP_PROP_FPS) or 25
         self.delay = int(1000 / self.fps)
         self.show_ui = show_ui
         self.detect_every_n = max(1, detect_every_n)
         self.frame_idx = 0
         self.last_tracked_objects: List[Dict[str, Any]] = []
+        self._stop_requested = False
 
         self.team_classifier = TeamClassifier(team_colors=team_colors)
         self.yolo_tracker = YoloByteTrackTracker(
@@ -104,7 +121,10 @@ class VideoTrackerPipeline:
         self._last_pitch_obs: Optional[PitchObservation] = None
         self.pitch_field_filter_tracks = bool(pitch_field_filter_tracks)
 
-        stem = os.path.splitext(os.path.basename(self.video_path))[0]
+        if self.is_camera:
+            stem = f"cam_{time.strftime('%Y%m%d_%H%M%S')}"
+        else:
+            stem = os.path.splitext(os.path.basename(self.video_path))[0]
         world_on = self.pinhole is not None or self.H is not None
         extra_meta = {
             "pitch_length_m": self.pitch.length_m,
@@ -128,10 +148,14 @@ class VideoTrackerPipeline:
             extra_meta=extra_meta,
         )
 
+    def request_stop(self) -> None:
+        self._stop_requested = True
+
     def run(self) -> None:
         m = self.yolo_tracker.model
         ckpt = getattr(m, "ckpt_path", None) or getattr(m, "model_name", "yolo")
-        print(f"Track pipeline: model={ckpt}, tracker={self.yolo_tracker.tracker}, detect_every_n={self.detect_every_n}")
+        mode = "camera" if self.is_camera else "file"
+        print(f"Track pipeline ({mode}): model={ckpt}, tracker={self.yolo_tracker.tracker}, detect_every_n={self.detect_every_n}")
         print(
             f"Output dir: {self.data_writer.output_dir}, world coords: "
             f"{self.pinhole is not None or self.H is not None} "
@@ -139,7 +163,17 @@ class VideoTrackerPipeline:
             f"pitch field: {self.pitch_field_detect}"
         )
 
-        while True:
+        for frame, display, current, frame_idx in self._iter_frames():
+            if self.show_ui:
+                cv2.imshow("Video Tracker", display)
+                key = cv2.waitKey(1 if self.is_camera else self.delay) & 0xFF
+                if key == ord("q"):
+                    break
+
+        self._finish()
+
+    def _iter_frames(self):
+        while not self._stop_requested:
             ret, frame = self.cap.read()
             if not ret:
                 break
@@ -161,19 +195,16 @@ class VideoTrackerPipeline:
             current = _enrich_world_coords(tracked, self.H, self.pinhole)
             self.data_writer.write_frame(self.frame_idx, current)
 
-            if self.show_ui:
-                display = frame.copy()
-                if self.pitch_field_detect and self._last_pitch_obs is not None:
-                    draw_pitch_observation(display, self._last_pitch_obs)
-                draw_tracking_overlay(display, current)
-                draw_frame_hud(display, self.frame_idx, self.detect_every_n)
-                cv2.imshow("Video Tracker", display)
-                key = cv2.waitKey(self.delay) & 0xFF
-                if key == ord("q"):
-                    break
+            display = frame.copy()
+            if self.pitch_field_detect and self._last_pitch_obs is not None:
+                draw_pitch_observation(display, self._last_pitch_obs)
+            draw_tracking_overlay(display, current)
+            draw_frame_hud(display, self.frame_idx, self.detect_every_n)
 
+            yield frame, display, current, self.frame_idx
             self.frame_idx += 1
 
+    def _finish(self) -> None:
         self.cap.release()
         self.data_writer.close()
         if self.show_ui:
