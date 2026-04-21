@@ -69,7 +69,7 @@ def draw_tracking_overlay(frame, tracked_objects: List[Dict[str, Any]]) -> None:
     for obj in tracked_objects:
         x, y, w, h = [int(v) for v in obj["bbox"]]
         label = obj["label"]
-        color = _label_color(label)
+        color = obj.get("box_color") or _label_color(label)
         cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
         conf = obj.get("conf", 0)
         cv2.putText(

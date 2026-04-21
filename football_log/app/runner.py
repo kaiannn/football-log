@@ -1,8 +1,16 @@
-"""视频/摄像头读取 → 跟踪 → 可选世界坐标 → 导出。"""
+"""视频/摄像头读取 → 跟踪 → 可选世界坐标 → 导出。
+
+Pipeline 支持通过 Protocol 注入自定义组件：
+- detector:   protocols.Detector      (默认 YoloByteTrackTracker)
+- team_cls:   protocols.TeamClassifierProto (默认 TeamClassifier)
+- projector:  protocols.WorldProjector (默认 HomographyProjector / PinholeGroundProjector)
+- pitch_est:  protocols.PitchEstimator (默认 PitchFieldEstimator)
+- exporter:   protocols.Exporter       (默认 TrackingDataWriter)
+"""
 
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 import cv2
 import numpy as np
@@ -11,12 +19,22 @@ from football_log.io.export import TrackingDataWriter
 from football_log.pitch.field_estimator import PitchFieldEstimator, TemporalPitchSmoother
 from football_log.pitch.integration import filter_objects_in_grass_mask
 from football_log.pitch.observation import PitchObservation
+from football_log.protocols import Detection
 from football_log.ui.overlay import draw_frame_hud, draw_pitch_observation, draw_tracking_overlay
 from football_log.vision.team_classifier import TeamClassifier
 from football_log.vision.tracker import YoloByteTrackTracker
-from football_log.world.homography import Homography, project_foot_to_world
+from football_log.world.homography import Homography, HomographyProjector
 from football_log.world.pitch_model import PitchSpec
 from football_log.world.pinhole_ground import PinholeGroundProjector, load_pinhole_ground_projector
+
+if TYPE_CHECKING:
+    from football_log.protocols import (
+        Detector,
+        Exporter,
+        PitchEstimator,
+        TeamClassifierProto,
+        WorldProjector,
+    )
 
 
 def _parse_video_source(source: str):
@@ -36,27 +54,33 @@ def _load_homography(path: Optional[str]) -> Optional[Homography]:
     return Homography(arr)
 
 
-def _enrich_world_coords(
-    objs: List[Dict[str, Any]],
-    H: Optional[Homography],
-    pinhole: Optional[PinholeGroundProjector],
-) -> List[Dict[str, Any]]:
-    if pinhole is None and H is None:
-        return objs
-    out: List[Dict[str, Any]] = []
-    for o in objs:
-        row = dict(o)
-        if pinhole is not None:
-            wx, wy = pinhole.project_foot_to_world(o["bbox"], o["label"])
-        else:
-            wx, wy = project_foot_to_world(o["bbox"], o["label"], H)
-        row["world_x_m"] = wx
-        row["world_y_m"] = wy
-        out.append(row)
-    return out
+def _enrich_detections(
+    detections: List[Detection],
+    projector: Optional["WorldProjector"],
+) -> List[Detection]:
+    if projector is None:
+        return detections
+    for det in detections:
+        wx, wy = projector.project(det.bbox, det.label)
+        det.world_x_m = wx
+        det.world_y_m = wy
+    return detections
 
 
 class VideoTrackerPipeline:
+    """核心流水线。
+
+    使用方式一（默认，向后兼容）：
+        pipeline = VideoTrackerPipeline(video_path="match.mp4")
+
+    使用方式二（注入自定义组件）：
+        pipeline = VideoTrackerPipeline(
+            video_path="match.mp4",
+            detector=MyCustomDetector(),
+            projector=MyCustomProjector(),
+        )
+    """
+
     def __init__(
         self,
         video_path: str,
@@ -76,6 +100,12 @@ class VideoTrackerPipeline:
         pitch_field_temporal_smooth: bool = True,
         pitch_field_filter_tracks: bool = False,
         team_colors: Optional[List[tuple]] = None,
+        # ------ 插件注入点 ------
+        detector: Optional["Detector"] = None,
+        team_cls: Optional["TeamClassifierProto"] = None,
+        projector: Optional["WorldProjector"] = None,
+        pitch_est: Optional["PitchEstimator"] = None,
+        exporter: Optional["Exporter"] = None,
     ):
         self.video_path = video_path
         source, self.is_camera = _parse_video_source(video_path)
@@ -94,27 +124,46 @@ class VideoTrackerPipeline:
         self.show_ui = show_ui
         self.detect_every_n = max(1, detect_every_n)
         self.frame_idx = 0
-        self.last_tracked_objects: List[Dict[str, Any]] = []
         self._stop_requested = False
 
-        self.team_classifier = TeamClassifier(team_colors=team_colors)
-        self.yolo_tracker = YoloByteTrackTracker(
-            model_name=model_name,
-            conf=conf,
-            imgsz=imgsz,
-            tracker=tracker,
-        )
-        self.H = _load_homography(homography_path)
-        self.pinhole: Optional[PinholeGroundProjector] = None
-        if camera_calib_path:
-            self.pinhole = load_pinhole_ground_projector(camera_calib_path)
+        # ------ 组件初始化（注入优先，否则创建默认） ------
+
+        self.team_classifier: Any = team_cls or TeamClassifier(team_colors=team_colors)
+
+        if detector is not None:
+            self._detector = detector
+        else:
+            yolo = YoloByteTrackTracker(
+                model_name=model_name,
+                conf=conf,
+                imgsz=imgsz,
+                tracker=tracker,
+            )
+            yolo.set_team_classifier(self.team_classifier)
+            self._detector = yolo
+        self.yolo_tracker = self._detector
+
+        if projector is not None:
+            self._projector: Optional["WorldProjector"] = projector
+        else:
+            _pinhole: Optional[PinholeGroundProjector] = None
+            if camera_calib_path:
+                _pinhole = load_pinhole_ground_projector(camera_calib_path)
+            _H = _load_homography(homography_path)
+            if _pinhole is not None:
+                self._projector = _pinhole
+            elif _H is not None:
+                self._projector = HomographyProjector(_H)
+            else:
+                self._projector = None
         self.pitch = pitch or PitchSpec()
 
         self.pitch_field_detect = bool(pitch_field_detect)
         self.pitch_field_every_n = max(1, int(pitch_field_every_n))
-        self._pitch_estimator: Optional[PitchFieldEstimator] = (
-            PitchFieldEstimator() if self.pitch_field_detect else None
-        )
+        if pitch_est is not None:
+            self._pitch_estimator: Optional[Any] = pitch_est
+        else:
+            self._pitch_estimator = PitchFieldEstimator() if self.pitch_field_detect else None
         self._pitch_smoother: Optional[TemporalPitchSmoother] = (
             TemporalPitchSmoother() if (self.pitch_field_detect and pitch_field_temporal_smooth) else None
         )
@@ -125,41 +174,47 @@ class VideoTrackerPipeline:
             stem = f"cam_{time.strftime('%Y%m%d_%H%M%S')}"
         else:
             stem = os.path.splitext(os.path.basename(self.video_path))[0]
-        world_on = self.pinhole is not None or self.H is not None
+
+        world_on = self._projector is not None
         extra_meta = {
             "pitch_length_m": self.pitch.length_m,
             "pitch_width_m": self.pitch.width_m,
             "homography_path": homography_path,
             "camera_calib_path": camera_calib_path,
-            "world_coords_method": "pinhole_ground"
-            if self.pinhole is not None
-            else ("homography" if self.H is not None else None),
             "world_coords_enabled": world_on,
             "pitch_field_detect": self.pitch_field_detect,
             "pitch_field_every_n": self.pitch_field_every_n,
             "pitch_field_filter_tracks": self.pitch_field_filter_tracks,
         }
-        self.data_writer = TrackingDataWriter(
-            output_dir=output_dir,
-            output_prefix=f"{stem}_tracks",
-            output_format=output_format,
-            fps=self.fps,
-            video_path=self.video_path,
-            extra_meta=extra_meta,
-        )
+
+        if exporter is not None:
+            self.data_writer: Any = exporter
+        else:
+            self.data_writer = TrackingDataWriter(
+                output_dir=output_dir,
+                output_prefix=f"{stem}_tracks",
+                output_format=output_format,
+                fps=self.fps,
+                video_path=self.video_path,
+                extra_meta=extra_meta,
+            )
+
+        self.last_tracked_detections: List[Detection] = []
 
     def request_stop(self) -> None:
         self._stop_requested = True
 
     def run(self) -> None:
-        m = self.yolo_tracker.model
-        ckpt = getattr(m, "ckpt_path", None) or getattr(m, "model_name", "yolo")
+        det = self._detector
+        model_info = "custom"
+        if isinstance(det, YoloByteTrackTracker):
+            m = det.model
+            model_info = str(getattr(m, "ckpt_path", None) or getattr(m, "model_name", "yolo"))
         mode = "camera" if self.is_camera else "file"
-        print(f"Track pipeline ({mode}): model={ckpt}, tracker={self.yolo_tracker.tracker}, detect_every_n={self.detect_every_n}")
+        print(f"Track pipeline ({mode}): model={model_info}, detect_every_n={self.detect_every_n}")
         print(
-            f"Output dir: {self.data_writer.output_dir}, world coords: "
-            f"{self.pinhole is not None or self.H is not None} "
-            f"({'pinhole' if self.pinhole is not None else 'homography' if self.H is not None else 'off'}), "
+            f"Output dir: {getattr(self.data_writer, 'output_dir', '?')}, "
+            f"world coords: {self._projector is not None}, "
             f"pitch field: {self.pitch_field_detect}"
         )
 
@@ -178,11 +233,12 @@ class VideoTrackerPipeline:
             if not ret:
                 break
 
-            should_detect = (self.frame_idx % self.detect_every_n == 0) or not self.last_tracked_objects
+            should_detect = (self.frame_idx % self.detect_every_n == 0) or not self.last_tracked_detections
             if should_detect:
-                self.last_tracked_objects = self.yolo_tracker.track_frame(frame, self.team_classifier)
+                self.last_tracked_detections = self._detector.detect(frame)
 
-            tracked = self.last_tracked_objects
+            detections = list(self.last_tracked_detections)
+
             if self.pitch_field_detect and self._pitch_estimator is not None:
                 if self.frame_idx % self.pitch_field_every_n == 0 or self._last_pitch_obs is None:
                     obs = self._pitch_estimator.estimate(frame)
@@ -190,18 +246,22 @@ class VideoTrackerPipeline:
                         obs = self._pitch_smoother.smooth(obs)
                     self._last_pitch_obs = obs
                 if self.pitch_field_filter_tracks and self._last_pitch_obs is not None:
-                    tracked = filter_objects_in_grass_mask(tracked, self._last_pitch_obs.grass_mask)
+                    as_dicts = [d.to_dict() for d in detections]
+                    filtered = filter_objects_in_grass_mask(as_dicts, self._last_pitch_obs.grass_mask)
+                    filtered_ids = {o["id"] for o in filtered}
+                    detections = [d for d in detections if d.track_id in filtered_ids]
 
-            current = _enrich_world_coords(tracked, self.H, self.pinhole)
-            self.data_writer.write_frame(self.frame_idx, current)
+            detections = _enrich_detections(detections, self._projector)
+            self.data_writer.write_frame(self.frame_idx, detections)
 
+            current_dicts = [d.to_dict() for d in detections]
             display = frame.copy()
             if self.pitch_field_detect and self._last_pitch_obs is not None:
                 draw_pitch_observation(display, self._last_pitch_obs)
-            draw_tracking_overlay(display, current)
+            draw_tracking_overlay(display, current_dicts)
             draw_frame_hud(display, self.frame_idx, self.detect_every_n)
 
-            yield frame, display, current, self.frame_idx
+            yield frame, display, current_dicts, self.frame_idx
             self.frame_idx += 1
 
     def _finish(self) -> None:

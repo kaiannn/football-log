@@ -113,6 +113,14 @@ class PinholeGroundProjector:
             v = float(bbox[1] + 0.5 * bbox[3])
         return self.pixel_to_world_xy_m(u, v)
 
+    def project(
+        self,
+        bbox: Tuple[int, int, int, int],
+        label: str,
+    ) -> Tuple[Optional[float], Optional[float]]:
+        """WorldProjector 协议实现。"""
+        return self.project_foot_to_world(bbox, label)
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> PinholeGroundProjector:
         K = np.asarray(data["K"], dtype=np.float64)

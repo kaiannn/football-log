@@ -1,10 +1,18 @@
-"""结构化轨迹 JSONL/CSV 导出。"""
+"""结构化轨迹 JSONL/CSV 导出。
+
+实现 protocols.Exporter 接口，同时保留旧版 write_frame(frame_idx, List[dict]) 兼容。
+"""
+
+from __future__ import annotations
 
 import csv
 import json
 import os
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Union, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from football_log.protocols import Detection
 
 
 class TrackingDataWriter:
@@ -33,7 +41,7 @@ class TrackingDataWriter:
         self.jsonl_fp = None
         self.csv_fp = None
         self.csv_writer = None
-        self.records_written = 0
+        self._records_written = 0
 
         self._fieldnames = [
             "frame_idx",
@@ -50,6 +58,14 @@ class TrackingDataWriter:
         ]
         self._open()
         self._write_meta()
+
+    @property
+    def records_written(self) -> int:
+        return self._records_written
+
+    @records_written.setter
+    def records_written(self, value: int) -> None:
+        self._records_written = value
 
     def _open(self) -> None:
         if self.output_format in ("jsonl", "both"):
@@ -70,35 +86,47 @@ class TrackingDataWriter:
         with open(self.meta_path, "w", encoding="utf-8") as fp:
             json.dump(meta, fp, ensure_ascii=False, indent=2)
 
-    def write_frame(self, frame_idx: int, tracked_objects: List[Dict[str, Any]]) -> None:
+    def _write_row(self, frame_idx: int, obj: Dict[str, Any]) -> None:
         timestamp_sec = round(frame_idx / self.fps, 3)
-        for obj in tracked_objects:
-            x, y, w, h = [int(v) for v in obj["bbox"]]
-            wx = obj.get("world_x_m")
-            wy = obj.get("world_y_m")
-            row = {
-                "frame_idx": int(frame_idx),
-                "timestamp_sec": timestamp_sec,
-                "track_id": int(obj["id"]),
-                "label": obj["label"],
-                "x": x,
-                "y": y,
-                "w": w,
-                "h": h,
-                "conf": round(float(obj.get("conf", 0.0)), 4),
-                "world_x_m": "" if wx is None else round(float(wx), 4),
-                "world_y_m": "" if wy is None else round(float(wy), 4),
+        x, y, w, h = [int(v) for v in obj["bbox"]]
+        wx = obj.get("world_x_m")
+        wy = obj.get("world_y_m")
+        row = {
+            "frame_idx": int(frame_idx),
+            "timestamp_sec": timestamp_sec,
+            "track_id": int(obj.get("id", obj.get("track_id", -1))),
+            "label": obj.get("label", ""),
+            "x": x,
+            "y": y,
+            "w": w,
+            "h": h,
+            "conf": round(float(obj.get("conf", 0.0)), 4),
+            "world_x_m": "" if wx is None else round(float(wx), 4),
+            "world_y_m": "" if wy is None else round(float(wy), 4),
+        }
+        if self.jsonl_fp:
+            json_row = {
+                **row,
+                "world_x_m": None if wx is None else round(float(wx), 4),
+                "world_y_m": None if wy is None else round(float(wy), 4),
             }
-            if self.jsonl_fp:
-                json_row = {
-                    **row,
-                    "world_x_m": None if wx is None else round(float(wx), 4),
-                    "world_y_m": None if wy is None else round(float(wy), 4),
-                }
-                self.jsonl_fp.write(json.dumps(json_row, ensure_ascii=False) + "\n")
-            if self.csv_writer:
-                self.csv_writer.writerow(row)
-            self.records_written += 1
+            self.jsonl_fp.write(json.dumps(json_row, ensure_ascii=False) + "\n")
+        if self.csv_writer:
+            self.csv_writer.writerow(row)
+        self._records_written += 1
+
+    def write_frame(
+        self,
+        frame_idx: int,
+        tracked_objects: Union[Sequence["Detection"], List[Dict[str, Any]]],
+    ) -> None:
+        from football_log.protocols import Detection
+
+        for obj in tracked_objects:
+            if isinstance(obj, Detection):
+                self._write_row(frame_idx, obj.to_dict())
+            else:
+                self._write_row(frame_idx, obj)
 
     def close(self) -> None:
         if self.jsonl_fp:

@@ -72,3 +72,17 @@ def project_foot_to_world(
     if np.isnan(wx) or np.isnan(wy):
         return None, None
     return wx, wy
+
+
+class HomographyProjector:
+    """WorldProjector 协议实现：基于 3x3 单应矩阵的坐标映射。"""
+
+    def __init__(self, H: Homography) -> None:
+        self._H = H
+
+    def project(
+        self,
+        bbox: Tuple[int, int, int, int],
+        label: str,
+    ) -> Tuple[Optional[float], Optional[float]]:
+        return project_foot_to_world(bbox, label, self._H)

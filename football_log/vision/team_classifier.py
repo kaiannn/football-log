@@ -59,6 +59,18 @@ def _patch_to_hs_feature(patch_bgr: np.ndarray) -> Optional[np.ndarray]:
     return np.array([float(h_vals.mean()), float(s_vals.mean())], dtype=np.float32)
 
 
+def get_dominant_color(frame: np.ndarray, bbox: Tuple[int, ...]) -> Optional[Tuple[int, int, int]]:
+    patch = _extract_jersey_patch(frame, bbox)
+    if patch is None:
+        return None
+    mask = ~_grass_mask(patch)
+    if mask.sum() < 10:
+        return None
+    pixels = patch[mask]
+    median_bgr = np.median(pixels, axis=0).astype(int)
+    return (int(median_bgr[0]), int(median_bgr[1]), int(median_bgr[2]))
+
+
 def _bgr_to_hs_center(bgr: Tuple[int, int, int]) -> np.ndarray:
     pixel = np.array([[list(bgr)]], dtype=np.uint8)
     hsv = cv2.cvtColor(pixel, cv2.COLOR_BGR2HSV)
