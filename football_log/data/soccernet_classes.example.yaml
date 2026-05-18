@@ -1,0 +1,20 @@
+# Example class map for SoccerNet Tracking annotations.
+#
+# Always run the converter with --dry-run FIRST to print the actual class IDs
+# in your downloaded SoccerNet split — class numbering varies between releases.
+# Edit this file so `input_to_output` covers exactly the IDs reported.
+#
+# Class IDs not listed here are silently skipped (good for crowd / staff / ads).
+
+input_to_output:
+  1: player        # team A players
+  2: player        # team B players
+  3: player        # goalkeepers (treat as players for Module 1; team-class detector revisits in Module 3)
+  4: referee       # main + assistant referees
+  5: ball
+
+# Order matters — this is also the YOLO class index order.
+output_classes:
+  - player    # 0
+  - ball      # 1
+  - referee   # 2

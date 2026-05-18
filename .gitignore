@@ -11,7 +11,8 @@ env/
 outputs/
 test_videos/
 runs/
-data/
+# Top-level data/ (downloaded datasets) — but NOT the football_log/data/ source module.
+/data/
 eval_config.yaml
 
 # IDE / OS
