@@ -1,26 +1,31 @@
 #!/usr/bin/env python3
-"""CLI shim for football_log.data.yolo_convert.
+"""Convert SoccerNet annotations into YOLO format.
+
+Two source formats are supported and auto-detected:
+
+  - ``mot``: SoccerNet Tracking (gt/gt.txt MOT CSV per sequence)
+  - ``gsr``: SoccerNet Game-State Reconstruction 2025 (Labels-GameState.json)
 
 Examples:
 
-    # Preview source class IDs before committing to a class map.
+    # Auto-detect format, preview class IDs without writing.
     python scripts/prepare_yolo_dataset.py \\
-        --source-dir data/soccernet/raw \\
+        --source-dir data/gsr2025/extracted \\
         --dry-run
-
-    # Convert with default class map (player / ball / referee).
-    python scripts/prepare_yolo_dataset.py \\
-        --source-dir data/soccernet/raw \\
-        --output-dir data/soccernet
 
     # Convert with a custom class map (recommended).
     python scripts/prepare_yolo_dataset.py \\
+        --source-dir data/gsr2025/extracted \\
+        --output-dir data/soccernet \\
+        --class-map football_log/data/gsr_classes.example.yaml \\
+        --split-ratios 0.7,0.15,0.15 \\
+        --seed 42
+
+    # Force a specific format (e.g. when both layouts coexist).
+    python scripts/prepare_yolo_dataset.py \\
         --source-dir data/soccernet/raw \\
         --output-dir data/soccernet \\
-        --class-map config/soccernet_classes.yaml \\
-        --split-ratios 0.7,0.15,0.15 \\
-        --seed 42 \\
-        --copy-images
+        --format mot
 """
 
 from __future__ import annotations
@@ -36,12 +41,8 @@ _ROOT = _HERE.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from football_log.data.yolo_convert import (  # noqa: E402
-    convert,
-    default_class_map,
-    dry_run,
-    load_class_map,
-)
+from football_log.data import gsr_convert, yolo_convert  # noqa: E402
+from football_log.data.yolo_convert import load_class_map  # noqa: E402
 
 
 def _parse_split_ratios(s: str) -> tuple[float, float, float]:
@@ -54,10 +55,28 @@ def _parse_split_ratios(s: str) -> tuple[float, float, float]:
     return parts[0], parts[1], parts[2]
 
 
+def _resolve_format(arg: str, source_dir: Path) -> str:
+    if arg != "auto":
+        return arg
+    detected = gsr_convert.detect_format(source_dir)
+    if detected == "unknown":
+        raise SystemExit(
+            f"Could not auto-detect format under {source_dir}. "
+            f"Pass --format mot or --format gsr explicitly."
+        )
+    return detected
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument("--source-dir", required=True, type=Path, help="SoccerNet Tracking raw directory")
+    parser.add_argument("--source-dir", required=True, type=Path, help="Dataset root (one subdir per sequence)")
     parser.add_argument("--output-dir", type=Path, help="Where to write YOLO dataset (required unless --dry-run)")
+    parser.add_argument(
+        "--format",
+        choices=["auto", "mot", "gsr"],
+        default="auto",
+        help="Source annotation format (default: auto-detect)",
+    )
     parser.add_argument("--class-map", type=Path, help="YAML: input_to_output (dict) + output_classes (list)")
     parser.add_argument("--split-ratios", type=_parse_split_ratios, default=(0.7, 0.15, 0.15))
     parser.add_argument("--seed", type=int, default=0)
@@ -85,19 +104,24 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    fmt = _resolve_format(args.format, args.source_dir)
+    print(f"[info] format: {fmt}", file=sys.stderr)
+
+    backend = gsr_convert if fmt == "gsr" else yolo_convert
+
     if args.dry_run:
-        summary = dry_run(args.source_dir)
+        summary = backend.dry_run(args.source_dir)
         print(json.dumps(summary, indent=2, ensure_ascii=False))
         return
 
     if args.output_dir is None:
         parser.error("--output-dir is required (or pass --dry-run)")
 
-    class_map = load_class_map(args.class_map) if args.class_map else default_class_map()
+    class_map = load_class_map(args.class_map) if args.class_map else backend.default_class_map()
     if args.class_map is None:
         print("[warn] using built-in default class map; verify with --dry-run before committing", file=sys.stderr)
 
-    result = convert(
+    result = backend.convert(
         source_dir=args.source_dir,
         output_dir=args.output_dir,
         class_map=class_map,

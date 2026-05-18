@@ -217,6 +217,45 @@ knobs that compose: `--frame-stride`, `--max-sequences`,
 CV datasets. Plan the data lifecycle (cloud-only, cloud-then-local, or
 hybrid) before writing the training script.
 
+### 3.6 SoccerNet Tracking host (KAUST) unreachable from China
+
+**What**: the SoccerNet `pip install SoccerNet` downloader hard-codes the
+KAUST Nextcloud (`exrcsdrive.kaust.edu.sa`) as the file source. From a
+mainland-China cloud GPU rental, that endpoint stalls at ~190 B/s — at
+that rate the 100 GB tracking split would take 8+ days. We probed the
+package source to confirm only **2025 tasks** (`mvfouls-2025`,
+`gamestate-2025`, `depth-2025`, `spotting-ball-2025`) have a HuggingFace
+fallback path; the older `tracking` task is locked to KAUST.
+
+**Resolution**: switched the entire Module 1 dataset to **SoccerNet
+Game-State Reconstruction 2025 (SN-GSR-2025)** —
+[https://hf-mirror.com/datasets/SoccerNet/SN-GSR-2025](https://hf-mirror.com/datasets/SoccerNet/SN-GSR-2025).
+17 GB instead of 100 GB, and reachable from China via `hf-mirror.com`.
+Even there, `huggingface_hub.snapshot_download` was hitting recurring
+read-timeouts because the LFS files redirect to AWS-east via Xet. Fixed
+by replacing the downloader with `aria2c -x 16 -s 16 --max-tries=0
+--retry-wait=10 --timeout=120`, which holds 16 parallel HTTPS connections
+to the same S3 URL and resumes through transient resets. Steady **3.5 MB/s**
+on this hardware — full train+test in ~80 minutes.
+
+**Side effect (positive)**: GSR-2025 ships *richer* annotations than
+SoccerNet Tracking (per-bbox `team` / `role` / `jersey`, plus pitch-line
+and camera-pose ground truth in the same JSON). Module 3B's "team-as-class
+detector" plan now has direct labels without scraping a separate file,
+and Module 4 has true pitch-line GT to validate auto-calibration against.
+
+**Implementation**: `scripts/download_gsr2025.sh` plus a new
+`football_log/data/gsr_convert.py` (15 tests) that handles the COCO-style
+`Labels-GameState.json` format. `scripts/prepare_yolo_dataset.py` now
+auto-detects the source format (`--format auto|mot|gsr`); the legacy MOT
+converter is kept for if/when SoccerNet Tracking becomes reachable again.
+
+**Lesson**: (1) when a dataset hosts files in a single foreign region,
+verify your training network reaches it before the rental clock starts;
+(2) for HuggingFace LFS via mainland-China mirrors, prefer aria2c over
+`hf_hub_download` — the multi-connection model is much more tolerant of
+the long-haul resets you can't escape.
+
 ---
 
 ## 4. Schema / API quirks worth knowing

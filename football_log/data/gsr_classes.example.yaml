@@ -1,0 +1,29 @@
+# Example class map for SoccerNet GSR-2025 (Game-State Reconstruction).
+#
+# Source category IDs (per Labels-GameState.json):
+#   1 = player
+#   2 = goalkeeper
+#   3 = referee
+#   4 = ball
+#   5 = pitch          (skipped — line annotation, not a detection target)
+#   6 = camera         (skipped — camera intrinsics, not a detection target)
+#   7 = other          (skipped — staff / spectators that escaped filtering)
+#
+# This default merges player + goalkeeper into a single "player" class for
+# Module 1. Module 3 (team-as-class detection) revisits the split using the
+# `attributes.team` field that GSR-2025 exposes on every annotation.
+#
+# Always run the converter with --dry-run FIRST to confirm the actual IDs
+# in your downloaded split — numbering can shift between releases.
+
+input_to_output:
+  1: player        # field players (both teams)
+  2: player        # goalkeepers (treated as players for Module 1)
+  3: referee       # main + assistant referees
+  4: ball
+
+# Order matters — this is the YOLO class index order.
+output_classes:
+  - player    # 0
+  - ball      # 1
+  - referee   # 2

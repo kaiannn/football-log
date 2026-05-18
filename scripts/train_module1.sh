@@ -36,9 +36,27 @@ set -euo pipefail
 PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 VENV_PYTHON="${VENV_PYTHON:-${PROJECT_ROOT}/.venv/bin/python}"
 
-RAW_DIR="${RAW_DIR:-${PROJECT_ROOT}/data/soccernet/raw/tracking}"
+# RAW_DIR auto-detect: prefer GSR-2025 (data/gsr2025/extracted) if present,
+# fall back to legacy SoccerNet Tracking layout. Both formats are handled by
+# scripts/prepare_yolo_dataset.py via --format auto.
+if [ -z "${RAW_DIR:-}" ]; then
+    if [ -d "${PROJECT_ROOT}/data/gsr2025/extracted" ]; then
+        RAW_DIR="${PROJECT_ROOT}/data/gsr2025/extracted"
+    elif [ -d "${PROJECT_ROOT}/data/soccernet/raw/tracking" ]; then
+        RAW_DIR="${PROJECT_ROOT}/data/soccernet/raw/tracking"
+    else
+        RAW_DIR="${PROJECT_ROOT}/data/gsr2025/extracted"
+    fi
+fi
 YOLO_DIR="${YOLO_DIR:-${PROJECT_ROOT}/data/soccernet}"
-CLASS_MAP="${CLASS_MAP:-${PROJECT_ROOT}/football_log/data/soccernet_classes.example.yaml}"
+# CLASS_MAP auto: gsr_classes for GSR-2025, soccernet_classes for legacy MOT.
+if [ -z "${CLASS_MAP:-}" ]; then
+    if [[ "${RAW_DIR}" == *gsr2025* ]]; then
+        CLASS_MAP="${PROJECT_ROOT}/football_log/data/gsr_classes.example.yaml"
+    else
+        CLASS_MAP="${PROJECT_ROOT}/football_log/data/soccernet_classes.example.yaml"
+    fi
+fi
 
 BASELINE_WEIGHTS="${BASELINE_WEIGHTS:-yolov8n.pt}"
 TRAIN_MODEL="${TRAIN_MODEL:-yolov8s.pt}"
@@ -77,8 +95,9 @@ log "Step 0: environment check"
 "${VENV_PYTHON}" -c "import torch; assert torch.cuda.is_available(), 'CUDA not available'; print('GPU:', torch.cuda.get_device_name(0), '|', round(torch.cuda.get_device_properties(0).total_memory / 1e9, 1), 'GB VRAM')"
 
 if [ ! -d "${RAW_DIR}" ]; then
-    warn "raw SoccerNet directory not found: ${RAW_DIR}"
+    warn "raw dataset directory not found: ${RAW_DIR}"
     warn "If the download is still running, wait. If it's done, set RAW_DIR to its path."
+    warn "GSR-2025: extract train.zip / test.zip into data/gsr2025/extracted/"
     die "cannot proceed without the raw dataset"
 fi
 
