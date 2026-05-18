@@ -113,7 +113,11 @@ log "Step 1: dry-run converter (output → ${DRY_RUN_LOG})"
     --dry-run 2>&1 | tee "${DRY_RUN_LOG}"
 
 log "Class IDs in source data above. Edit ${CLASS_MAP} now if they differ from the default mapping. Press ENTER to continue, Ctrl-C to abort."
-read -r _
+if [ "${NONINTERACTIVE:-0}" = "1" ]; then
+    log "  NONINTERACTIVE=1 → skipping confirmation"
+else
+    read -r _
+fi
 
 # ---- Step 2: convert SoccerNet → YOLO ----------------------------------------
 
