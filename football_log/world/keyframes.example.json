@@ -1,0 +1,38 @@
+{
+  "_README": [
+    "Hand-labeled keyframes for runtime auto-calibration.",
+    "Each keyframe maps image pixels to world-meter coordinates.",
+    "Standard pitch is 105 m (length, x-axis) × 68 m (width, y-axis), origin = NW corner.",
+    "Pick keyframes ~5–15 seconds apart in panning sequences; closer if the camera moves fast.",
+    "At each keyframe, label at least 4 (preferably 5–8) recognizable points whose world coordinates you know:",
+    "  - 4 pitch corners (well-distributed, hardest to confuse)",
+    "  - center spot (52.5, 34)",
+    "  - penalty spots (11, 34) and (94, 34)",
+    "  - goal posts (0, 30.66 / 0, 37.34) and (105, 30.66 / 105, 37.34)",
+    "Use scripts/calibrate_reference.py or any image annotator to pick the pixel positions."
+  ],
+  "video_path": "data/clips/match_panning.mp4",
+  "pitch_dimensions": {"length_m": 105.0, "width_m": 68.0},
+  "keyframes": [
+    {
+      "frame_idx": 0,
+      "points": [
+        {"name": "corner_NW",      "image_uv": [120,  80],  "world_xy_m": [0.0,   0.0]},
+        {"name": "corner_NE",      "image_uv": [1800, 90],  "world_xy_m": [105.0, 0.0]},
+        {"name": "corner_SW",      "image_uv": [80,   980], "world_xy_m": [0.0,   68.0]},
+        {"name": "corner_SE",      "image_uv": [1840, 990], "world_xy_m": [105.0, 68.0]},
+        {"name": "center_spot",    "image_uv": [960,  540], "world_xy_m": [52.5,  34.0]}
+      ]
+    },
+    {
+      "frame_idx": 250,
+      "points": [
+        {"name": "corner_NW",      "image_uv": [200,  120], "world_xy_m": [0.0,   0.0]},
+        {"name": "corner_NE",      "image_uv": [1880, 130], "world_xy_m": [105.0, 0.0]},
+        {"name": "corner_SW",      "image_uv": [160,  1020], "world_xy_m": [0.0,  68.0]},
+        {"name": "corner_SE",      "image_uv": [1920, 1030], "world_xy_m": [105.0, 68.0]},
+        {"name": "center_spot",    "image_uv": [1040, 580], "world_xy_m": [52.5,  34.0]}
+      ]
+    }
+  ]
+}

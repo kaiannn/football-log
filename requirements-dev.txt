@@ -1,0 +1,7 @@
+# Dev-only dependencies (testing + eval extras).
+# Install with: pip install -r requirements-dev.txt
+
+pytest>=7,<9
+
+# Optional eval-time deps (not imported by the main pipeline):
+motmetrics>=1.4

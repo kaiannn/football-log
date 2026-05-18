@@ -29,6 +29,8 @@ class Detection:
     box_color: Optional[Tuple[int, int, int]] = None
     world_x_m: Optional[float] = None
     world_y_m: Optional[float] = None
+    world_x_m_smoothed: Optional[float] = None
+    world_y_m_smoothed: Optional[float] = None
     extra: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -40,6 +42,8 @@ class Detection:
             "box_color": self.box_color,
             "world_x_m": self.world_x_m,
             "world_y_m": self.world_y_m,
+            "world_x_m_smoothed": self.world_x_m_smoothed,
+            "world_y_m_smoothed": self.world_y_m_smoothed,
             **self.extra,
         }
 
@@ -53,6 +57,8 @@ class Detection:
             box_color=d.get("box_color"),
             world_x_m=d.get("world_x_m"),
             world_y_m=d.get("world_y_m"),
+            world_x_m_smoothed=d.get("world_x_m_smoothed"),
+            world_y_m_smoothed=d.get("world_y_m_smoothed"),
         )
 
 
@@ -70,14 +76,20 @@ class Detector(Protocol):
 
 @runtime_checkable
 class TeamClassifierProto(Protocol):
-    """分队：给单个检测结果打上队伍标签。"""
+    """分队：给单个检测打上队伍标签（瞬时判定 + 跨帧平滑）。
 
-    def classify(
-        self,
-        frame: np.ndarray,
-        detection: Detection,
-    ) -> str:
-        """返回标签字符串，如 "Team A" / "Team B" / "Player"。"""
+    默认 Detector（YoloByteTrackTracker）按以下顺序调用：
+        instant = tc.instant_label(frame, bbox)
+        label   = tc.smooth_label(track_id, instant)
+    自定义实现需同时提供这两个方法。
+    """
+
+    def instant_label(self, frame: np.ndarray, bbox: Tuple[int, ...]) -> str:
+        """根据当前帧 + 边界框给出瞬时标签。"""
+        ...
+
+    def smooth_label(self, track_id: int, instant_label: str) -> str:
+        """基于历史瞬时标签，对同一 track_id 做时序平滑后输出最终标签。"""
         ...
 
 

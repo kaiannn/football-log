@@ -1,0 +1,36 @@
+# Tracker config: BotSORT with Re-ID embeddings enabled.
+#
+# Same algorithm as ultralytics' built-in `botsort.yaml`, but with Re-ID
+# appearance features added to the association cost — the practical
+# DeepSORT-equivalent for our pipeline.
+#
+# Re-ID adds an OSNet-style appearance embedding to each detection;
+# matches use cost = α·IoU + β·cosine(reid). Substantially reduces ID
+# switches under heavy occlusion (tackles, headers, dense defending).
+#
+# Tradeoffs vs `bytetrack.yaml`:
+# + Better ID stability through occlusion
+# + Better recovery when a player is re-detected after disappearing briefly
+# - Slower (~2x): the Re-ID network runs on every detection
+# - Needs ultralytics >= 8.3.x (older versions ignore `with_reid`)
+#
+# Usage:
+#   python run.py --video match.mp4 --tracker botsort+reid
+
+tracker_type: botsort
+
+# Detection thresholds (same defaults as botsort.yaml)
+track_high_thresh: 0.5
+track_low_thresh: 0.1
+new_track_thresh: 0.6
+track_buffer: 30
+match_thresh: 0.8
+
+# Global Motion Compensation: helps when camera pans (broadcast footage).
+gmc_method: sparseOptFlow
+
+# Re-ID
+with_reid: True
+proximity_thresh: 0.5
+appearance_thresh: 0.25
+model: auto    # ultralytics picks an appropriate Re-ID backbone

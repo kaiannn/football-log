@@ -1,11 +1,15 @@
 """YOLO + ByteTrack/BoT-SORT 跟踪封装。
 
-实现 protocols.Detector 接口，同时保留旧版 track_frame 以兼容已有调用方。
+实现 protocols.Detector 接口。
+
+支持配置 player / ball / referee 三类的源 class IDs，便于切换到自训练权重：
+- COCO 默认（yolov8n.pt）：player=[0], ball=[32], referee=None
+- Module 1 自训练权重（顺序 player, ball, referee）：player=[0], ball=[1], referee=[2]
 """
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, TYPE_CHECKING
+from typing import Any, Iterable, List, Optional, Sequence, Tuple, TYPE_CHECKING
 
 import numpy as np
 
@@ -21,18 +25,22 @@ else:
     _import_error = None
 
 from football_log.vision.team_classifier import TeamClassifier, get_dominant_color
+from football_log.vision.tracker_registry import resolve_tracker
+
+
+def _coerce_ids(value: Optional[Iterable[int] | int]) -> Tuple[int, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, int):
+        return (value,)
+    return tuple(int(v) for v in value)
 
 
 class YoloByteTrackTracker:
     """Detector 协议实现：YOLO 检测 + ByteTrack/BoT-SORT 跟踪。
 
-    同时满足两种使用方式：
-    - 新接口 detect(frame) → List[Detection]（需要先 set_team_classifier）
-    - 旧接口 track_frame(frame, team_classifier) → List[dict]
+    使用：先 set_team_classifier(tc) 注入分队器，再调用 detect(frame) → List[Detection]。
     """
-
-    person_class_id = 0
-    ball_class_id = 32
 
     def __init__(
         self,
@@ -40,74 +48,69 @@ class YoloByteTrackTracker:
         conf: float = 0.3,
         imgsz: int = 640,
         tracker: str = "bytetrack.yaml",
+        player_class_ids: Sequence[int] = (0,),
+        ball_class_ids: Sequence[int] = (32,),
+        referee_class_ids: Optional[Sequence[int]] = None,
     ):
         if YOLO is None:
             raise RuntimeError("未安装 ultralytics，请先执行: pip install ultralytics") from _import_error
         self.model = YOLO(model_name)
         self.conf = conf
         self.imgsz = imgsz
-        self.tracker = tracker
+        self.tracker = resolve_tracker(tracker)
+        self.player_class_ids: Tuple[int, ...] = _coerce_ids(player_class_ids)
+        self.ball_class_ids: Tuple[int, ...] = _coerce_ids(ball_class_ids)
+        self.referee_class_ids: Tuple[int, ...] = _coerce_ids(referee_class_ids)
         self._team_classifier: Optional[TeamClassifier] = None
 
     def set_team_classifier(self, tc: Any) -> None:
         self._team_classifier = tc
 
-    # ------ 新接口 (Detector Protocol) ------
+    @property
+    def all_class_ids(self) -> List[int]:
+        return list(self.player_class_ids + self.ball_class_ids + self.referee_class_ids)
+
+    # ------ Detector Protocol ------
 
     def detect(self, frame: np.ndarray) -> List["Detection"]:
         from football_log.protocols import Detection
 
         raw = self._track_raw(frame)
-        tc = self._team_classifier
         results: List[Detection] = []
         for item in raw:
-            bbox = item["bbox"]
-            obj_cls = item["cls"]
-            track_id = item["id"]
-            conf = item["conf"]
-
-            if obj_cls == self.ball_class_id:
-                label = "Ball"
-                box_color = None
-            else:
-                if tc is not None:
-                    instant = tc.instant_label(frame, bbox)
-                    label = tc.smooth_label(track_id, instant)
-                    box_color = get_dominant_color(frame, bbox)
-                else:
-                    label = "Player"
-                    box_color = get_dominant_color(frame, bbox)
-
+            label, box_color = self._assign_label(
+                item["cls"], frame, item["bbox"], item["id"]
+            )
             results.append(Detection(
-                track_id=track_id,
-                bbox=bbox,
+                track_id=item["id"],
+                bbox=item["bbox"],
                 label=label,
-                conf=conf,
+                conf=item["conf"],
                 box_color=box_color,
             ))
         return results
 
-    # ------ 旧接口（向后兼容） ------
+    def _assign_label(
+        self,
+        obj_cls: int,
+        frame: np.ndarray,
+        bbox: Tuple[int, int, int, int],
+        track_id: int,
+    ) -> Tuple[str, Optional[Tuple[int, int, int]]]:
+        """Pure label-resolution logic; testable without ultralytics."""
+        if obj_cls in self.ball_class_ids:
+            return "Ball", None
+        if obj_cls in self.referee_class_ids:
+            return "Referee", None
 
-    def track_frame(self, frame, team_classifier) -> List[dict]:
-        raw = self._track_raw(frame)
-        tracked: List[dict] = []
-        for item in raw:
-            bbox = item["bbox"]
-            obj_cls = item["cls"]
-            track_id = item["id"]
-            conf = item["conf"]
-
-            if obj_cls == self.ball_class_id:
-                label = "Ball"
-                box_color = None
-            else:
-                instant = team_classifier.instant_label(frame, bbox)
-                label = team_classifier.smooth_label(track_id, instant)
-                box_color = get_dominant_color(frame, bbox)
-
-            tracked.append({"id": track_id, "bbox": bbox, "label": label, "conf": conf, "box_color": box_color})
-        return tracked
+        # Default branch: treat as a player and run team classification if available.
+        tc = self._team_classifier
+        if tc is not None:
+            instant = tc.instant_label(frame, bbox)
+            label = tc.smooth_label(track_id, instant)
+        else:
+            label = "Player"
+        return label, get_dominant_color(frame, bbox)
 
     # ------ 内部方法 ------
 
@@ -116,7 +119,7 @@ class YoloByteTrackTracker:
             frame,
             persist=True,
             tracker=self.tracker,
-            classes=[self.person_class_id, self.ball_class_id],
+            classes=self.all_class_ids,
             conf=self.conf,
             imgsz=self.imgsz,
             verbose=False,

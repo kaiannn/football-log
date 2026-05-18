@@ -10,6 +10,7 @@ Pipeline 支持通过 Protocol 注入自定义组件：
 
 import os
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 import cv2
@@ -22,10 +23,19 @@ from football_log.pitch.observation import PitchObservation
 from football_log.protocols import Detection
 from football_log.ui.overlay import draw_frame_hud, draw_pitch_observation, draw_tracking_overlay
 from football_log.vision.team_classifier import TeamClassifier
+from football_log.vision.team_classifier_keypoint import KeypointTeamClassifier
 from football_log.vision.tracker import YoloByteTrackTracker
+from football_log.world.auto_calibration import (
+    AutoCalibrationProjector,
+    HomographySequenceSource,
+    HomographySmoother,
+    KeyframeOpticalFlowSource,
+    load_keyframes_json,
+)
 from football_log.world.homography import Homography, HomographyProjector
 from football_log.world.pitch_model import PitchSpec
 from football_log.world.pinhole_ground import PinholeGroundProjector, load_pinhole_ground_projector
+from football_log.world.track_filter import TrackFilter
 
 if TYPE_CHECKING:
     from football_log.protocols import (
@@ -94,12 +104,20 @@ class VideoTrackerPipeline:
         tracker: str = "bytetrack.yaml",
         homography_path: Optional[str] = None,
         camera_calib_path: Optional[str] = None,
+        auto_calibration_keyframes: Optional[str] = None,
+        homography_sequence_path: Optional[str] = None,
+        homography_smoothing_alpha: float = 0.3,
         pitch: Optional[PitchSpec] = None,
-        pitch_field_detect: bool = False,
+        pitch_field_detect: bool = True,
         pitch_field_every_n: int = 15,
         pitch_field_temporal_smooth: bool = True,
-        pitch_field_filter_tracks: bool = False,
+        pitch_field_filter_tracks: bool = True,
         team_colors: Optional[List[tuple]] = None,
+        team_classifier_kind: str = "hsv",
+        player_class_ids: Optional[List[int]] = None,
+        ball_class_ids: Optional[List[int]] = None,
+        referee_class_ids: Optional[List[int]] = None,
+        bev_smoothing: bool = False,
         # ------ 插件注入点 ------
         detector: Optional["Detector"] = None,
         team_cls: Optional["TeamClassifierProto"] = None,
@@ -128,7 +146,12 @@ class VideoTrackerPipeline:
 
         # ------ 组件初始化（注入优先，否则创建默认） ------
 
-        self.team_classifier: Any = team_cls or TeamClassifier(team_colors=team_colors)
+        if team_cls is not None:
+            self.team_classifier: Any = team_cls
+        elif team_classifier_kind == "keypoint":
+            self.team_classifier = KeypointTeamClassifier(team_colors=team_colors)
+        else:
+            self.team_classifier = TeamClassifier(team_colors=team_colors)
 
         if detector is not None:
             self._detector = detector
@@ -138,10 +161,12 @@ class VideoTrackerPipeline:
                 conf=conf,
                 imgsz=imgsz,
                 tracker=tracker,
+                player_class_ids=tuple(player_class_ids) if player_class_ids else (0,),
+                ball_class_ids=tuple(ball_class_ids) if ball_class_ids else (32,),
+                referee_class_ids=tuple(referee_class_ids) if referee_class_ids else None,
             )
             yolo.set_team_classifier(self.team_classifier)
             self._detector = yolo
-        self.yolo_tracker = self._detector
 
         if projector is not None:
             self._projector: Optional["WorldProjector"] = projector
@@ -150,7 +175,20 @@ class VideoTrackerPipeline:
             if camera_calib_path:
                 _pinhole = load_pinhole_ground_projector(camera_calib_path)
             _H = _load_homography(homography_path)
-            if _pinhole is not None:
+            _auto: Optional[AutoCalibrationProjector] = None
+            if auto_calibration_keyframes:
+                kfs = load_keyframes_json(Path(auto_calibration_keyframes))
+                _source = KeyframeOpticalFlowSource(kfs)
+                _smoother = HomographySmoother(alpha=homography_smoothing_alpha)
+                _auto = AutoCalibrationProjector(_source, _smoother)
+            elif homography_sequence_path:
+                _source = HomographySequenceSource(Path(homography_sequence_path))
+                _smoother = HomographySmoother(alpha=homography_smoothing_alpha)
+                _auto = AutoCalibrationProjector(_source, _smoother)
+
+            if _auto is not None:
+                self._projector = _auto
+            elif _pinhole is not None:
                 self._projector = _pinhole
             elif _H is not None:
                 self._projector = HomographyProjector(_H)
@@ -170,6 +208,12 @@ class VideoTrackerPipeline:
         self._last_pitch_obs: Optional[PitchObservation] = None
         self.pitch_field_filter_tracks = bool(pitch_field_filter_tracks)
 
+        # BEV Kalman smoothing — only useful if a projector is set.
+        self.bev_smoothing = bool(bev_smoothing) and self._projector is not None
+        self._track_filter: Optional[TrackFilter] = (
+            TrackFilter(fps=self.fps) if self.bev_smoothing else None
+        )
+
         if self.is_camera:
             stem = f"cam_{time.strftime('%Y%m%d_%H%M%S')}"
         else:
@@ -181,10 +225,18 @@ class VideoTrackerPipeline:
             "pitch_width_m": self.pitch.width_m,
             "homography_path": homography_path,
             "camera_calib_path": camera_calib_path,
+            "auto_calibration_keyframes": auto_calibration_keyframes,
+            "homography_sequence_path": homography_sequence_path,
             "world_coords_enabled": world_on,
+            "auto_calibration_enabled": isinstance(self._projector, AutoCalibrationProjector),
             "pitch_field_detect": self.pitch_field_detect,
             "pitch_field_every_n": self.pitch_field_every_n,
             "pitch_field_filter_tracks": self.pitch_field_filter_tracks,
+            "player_class_ids": list(player_class_ids) if player_class_ids else [0],
+            "ball_class_ids": list(ball_class_ids) if ball_class_ids else [32],
+            "referee_class_ids": list(referee_class_ids) if referee_class_ids else [],
+            "team_classifier_kind": team_classifier_kind if team_cls is None else "custom",
+            "bev_smoothing_enabled": self.bev_smoothing,
         }
 
         if exporter is not None:
@@ -235,7 +287,18 @@ class VideoTrackerPipeline:
 
             should_detect = (self.frame_idx % self.detect_every_n == 0) or not self.last_tracked_detections
             if should_detect:
+                # If the team classifier needs per-frame setup (e.g. pose
+                # estimation for the keypoint classifier), let it run before
+                # detection so its results are ready when instant_label is called.
+                prepare = getattr(self.team_classifier, "update_pose_for_frame", None)
+                if prepare is not None:
+                    prepare(frame, self.frame_idx)
                 self.last_tracked_detections = self._detector.detect(frame)
+
+            # Auto-calibration: refresh the per-frame homography before projection.
+            calib_prepare = getattr(self._projector, "prepare_for_frame", None)
+            if calib_prepare is not None:
+                calib_prepare(self.frame_idx, frame)
 
             detections = list(self.last_tracked_detections)
 
@@ -248,10 +311,36 @@ class VideoTrackerPipeline:
                 if self.pitch_field_filter_tracks and self._last_pitch_obs is not None:
                     as_dicts = [d.to_dict() for d in detections]
                     filtered = filter_objects_in_grass_mask(as_dicts, self._last_pitch_obs.grass_mask)
-                    filtered_ids = {o["id"] for o in filtered}
-                    detections = [d for d in detections if d.track_id in filtered_ids]
+                    # Safety: if the filter would drop every detection (likely a bad
+                    # grass-mask frame: replay graphics, weird lighting), fall back
+                    # to the unfiltered list rather than throwing the frame away.
+                    if filtered or not detections:
+                        filtered_ids = {o["id"] for o in filtered}
+                        detections = [d for d in detections if d.track_id in filtered_ids]
 
             detections = _enrich_detections(detections, self._projector)
+            if self._track_filter is not None:
+                for det in detections:
+                    if det.world_x_m is None or det.world_y_m is None:
+                        smoothed = self._track_filter.update(
+                            track_id=det.track_id,
+                            world_xy=None,
+                            frame_idx=self.frame_idx,
+                            conf=float(det.conf),
+                        )
+                    else:
+                        smoothed = self._track_filter.update(
+                            track_id=det.track_id,
+                            world_xy=(det.world_x_m, det.world_y_m),
+                            frame_idx=self.frame_idx,
+                            conf=float(det.conf),
+                        )
+                    if smoothed is not None:
+                        det.world_x_m_smoothed = smoothed[0]
+                        det.world_y_m_smoothed = smoothed[1]
+                # Periodic eviction so the filter doesn't grow unbounded.
+                if self.frame_idx % 300 == 0:
+                    self._track_filter.evict_stale(self.frame_idx)
             self.data_writer.write_frame(self.frame_idx, detections)
 
             current_dicts = [d.to_dict() for d in detections]

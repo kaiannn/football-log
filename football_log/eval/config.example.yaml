@@ -1,0 +1,31 @@
+# Example eval config for football-log.
+#
+# Copy to ./eval_config.yaml (gitignored) and edit paths to point at your
+# actual data. The orchestrator (`python -m football_log.eval ...`) reads
+# this file and runs each enabled section.
+#
+# Each section is independently optional — set `enabled: false` or leave
+# required paths missing and that eval will be skipped (with a warning).
+
+detection:
+  enabled: true
+  weights: yolov8n.pt              # path to .pt weights
+  data: data/soccernet.yaml        # ultralytics-format dataset yaml
+  imgsz: 1280
+  conf: 0.001
+  iou: 0.6
+  split: val                       # val or test
+  device: null                     # null = auto, or 'cpu' / 'mps' / '0'
+
+tracking:
+  enabled: true
+  pred: outputs/match_tracks.jsonl # produced by run.py
+  gt: data/soccernet_tracking/match-001/gt.txt
+  iou_threshold: 0.5
+
+world:
+  enabled: true
+  points: data/eval/match_keypoints.json   # hand-labeled pixel ↔ world pairs
+  # exactly ONE of these must be set:
+  homography: data/calib/match.npy
+  # camera_calib: data/calib/match.json

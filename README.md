@@ -210,7 +210,7 @@ python3 -m football_log.app.calibrate_reference \
 默认输出到 `outputs/<视频名>_tracks.jsonl|csv` 与 `<视频名>_tracks.meta.json`。
 
 ```jsonl
-{"frame_idx": 120, "timestamp_sec": 4.0, "track_id": 3, "label": "player", "x": 342, "y": 188, "w": 48, "h": 112, "conf": 0.87, "team": 0, "world_x_m": 23.4, "world_y_m": -11.2}
+{"frame_idx": 120, "timestamp_sec": 4.0, "track_id": 3, "label": "Team A", "x": 342, "y": 188, "w": 48, "h": 112, "conf": 0.87, "world_x_m": 23.4, "world_y_m": -11.2}
 ```
 
 | 字段 | 类型 | 说明 |
@@ -218,10 +218,9 @@ python3 -m football_log.app.calibrate_reference \
 | `frame_idx` | int | 帧序号 |
 | `timestamp_sec` | float | 时间戳（秒） |
 | `track_id` | int | 跟踪 ID |
-| `label` | str | `player` / `ball` |
+| `label` | str | `Team A` / `Team B` / `Player` / `Ball` |
 | `x, y, w, h` | int | 边界框 |
 | `conf` | float | 检测置信度 |
-| `team` | int | 分队编号（0/1） |
 | `world_x_m`, `world_y_m` | float? | 世界坐标（米），需标定 |
 
 ---
@@ -233,7 +232,7 @@ football-log/
 ├── football_log/
 │   ├── protocols.py    # 插件接口：Detector / TeamClassifier / WorldProjector / Exporter
 │   ├── app/            # CLI、Web UI、VideoTrackerPipeline
-│   ├── vision/         # YOLO 跟踪、LAB K-Means 分队 + 时序平滑
+│   ├── vision/         # YOLO 跟踪、HSV K-Means 分队 + 时序平滑
 │   ├── pitch/          # 场地：草皮/线/四边形（OpenCV）
 │   ├── world/          # Homography、针孔标定 PinholeGroundProjector
 │   ├── io/             # JSONL/CSV 导出、meta
@@ -253,7 +252,7 @@ football-log/
 | Protocol | 方法 | 默认实现 | 替换场景 |
 |---|---|---|---|
 | `Detector` | `detect(frame) → List[Detection]` | YOLO + ByteTrack | 换用 RT-DETR、DINO 等 |
-| `TeamClassifierProto` | `classify(frame, detection) → str` | LAB K-Means | 换用 Re-ID、球衣号码识别 |
+| `TeamClassifierProto` | `instant_label(frame, bbox) → str` + `smooth_label(track_id, instant) → str` | HSV K-Means | 换用 Re-ID、球衣号码识别 |
 | `PitchEstimator` | `estimate(frame) → PitchObservation` | OpenCV HSV+Hough | 换用学习型场地分割 |
 | `WorldProjector` | `project(bbox, label) → (x_m, y_m)` | Homography / 针孔 | 换用 TVCalib 等 |
 | `Exporter` | `write_frame()` / `close()` | JSONL/CSV | 换成数据库、API 等 |
@@ -460,7 +459,7 @@ python3 experiments/tvcalib_infer.py
 
 - 🐌 **性能不足**：试试 `--detect-every-n 2` 或 `3`，跳帧检测可显著提速
 - 📐 **世界坐标抖动**：标定质量是关键，单应与 `PitchSpec` 的世界轴约定需与标定时选点一致
-- 👕 **分队不准**：默认 LAB K-Means 自动聚类 + 时序平滑；也可 `--team-colors` 手动指定两队 BGR 颜色
+- 👕 **分队不准**：默认 HSV K-Means 自动聚类 + 时序平滑；也可 `--team-colors` 手动指定两队 BGR 颜色
 
 ---
 

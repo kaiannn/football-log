@@ -10,6 +10,9 @@ env/
 # Outputs & local artifacts
 outputs/
 test_videos/
+runs/
+data/
+eval_config.yaml
 
 # IDE / OS
 .idea/
@@ -18,3 +21,25 @@ test_videos/
 
 # Ultralytics / weights (optional: remove next line if you want to commit .pt)
 *.pt
+
+# Python tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+dist/
+
+# Notebooks / env
+.ipynb_checkpoints/
+.env
+.env.*
+
+# Caches
+.cache/
+
+# Editors
+*.swp
+*.swo

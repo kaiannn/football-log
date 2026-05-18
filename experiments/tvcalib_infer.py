@@ -40,7 +40,6 @@ def ensure_segment_weights(repo_dir: Path, weights_url: str, weights_path: Path 
     if target.is_file():
         return target
     target.parent.mkdir(parents=True, exist_ok=True)
-    _run_checked([sys.executable, "-m", "urllib.request", weights_url], cwd=repo_dir)
     import urllib.request
     urllib.request.urlretrieve(weights_url, target)
     return target

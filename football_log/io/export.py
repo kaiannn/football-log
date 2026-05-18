@@ -8,7 +8,7 @@ from __future__ import annotations
 import csv
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Union, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -31,7 +31,7 @@ class TrackingDataWriter:
         self.fps = fps if fps > 0 else 25.0
         self.video_path = video_path
         self.extra_meta = extra_meta or {}
-        self.started_at = datetime.utcnow().isoformat() + "Z"
+        self.started_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         os.makedirs(self.output_dir, exist_ok=True)
 
         self.jsonl_path = os.path.join(self.output_dir, f"{self.output_prefix}.jsonl")
@@ -55,6 +55,8 @@ class TrackingDataWriter:
             "conf",
             "world_x_m",
             "world_y_m",
+            "world_x_m_smoothed",
+            "world_y_m_smoothed",
         ]
         self._open()
         self._write_meta()
@@ -62,10 +64,6 @@ class TrackingDataWriter:
     @property
     def records_written(self) -> int:
         return self._records_written
-
-    @records_written.setter
-    def records_written(self, value: int) -> None:
-        self._records_written = value
 
     def _open(self) -> None:
         if self.output_format in ("jsonl", "both"):
@@ -91,6 +89,8 @@ class TrackingDataWriter:
         x, y, w, h = [int(v) for v in obj["bbox"]]
         wx = obj.get("world_x_m")
         wy = obj.get("world_y_m")
+        wx_s = obj.get("world_x_m_smoothed")
+        wy_s = obj.get("world_y_m_smoothed")
         row = {
             "frame_idx": int(frame_idx),
             "timestamp_sec": timestamp_sec,
@@ -103,12 +103,16 @@ class TrackingDataWriter:
             "conf": round(float(obj.get("conf", 0.0)), 4),
             "world_x_m": "" if wx is None else round(float(wx), 4),
             "world_y_m": "" if wy is None else round(float(wy), 4),
+            "world_x_m_smoothed": "" if wx_s is None else round(float(wx_s), 4),
+            "world_y_m_smoothed": "" if wy_s is None else round(float(wy_s), 4),
         }
         if self.jsonl_fp:
             json_row = {
                 **row,
                 "world_x_m": None if wx is None else round(float(wx), 4),
                 "world_y_m": None if wy is None else round(float(wy), 4),
+                "world_x_m_smoothed": None if wx_s is None else round(float(wx_s), 4),
+                "world_y_m_smoothed": None if wy_s is None else round(float(wy_s), 4),
             }
             self.jsonl_fp.write(json.dumps(json_row, ensure_ascii=False) + "\n")
         if self.csv_writer:

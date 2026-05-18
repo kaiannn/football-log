@@ -1,5 +1,5 @@
-opencv-python
-numpy
-ultralytics
-pyyaml
-gradio
+opencv-python>=4.8,<5
+numpy>=1.24,<3
+ultralytics>=8.1,<9
+pyyaml>=6
+gradio>=4,<5

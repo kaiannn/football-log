@@ -1,0 +1,243 @@
+"""Keypoint-based team classifier — pose-driven torso-pixel voting in LAB color space.
+
+Drop-in alternative to the default HSV K-Means TeamClassifier. Implements the
+TeamClassifierProto interface (instant_label + smooth_label).
+
+Why this exists:
+    The HSV K-Means classifier collapses on low-saturation kits (black vs white,
+    grey vs grey) because in HSV with H+S features, both have S≈0 and arbitrary H.
+    LAB color space separates lightness from color, so black (L=0) and white
+    (L=100) are far apart on the L axis alone.
+
+How it works:
+    1. Pose model emits torso keypoints (shoulders + hips) per person per frame.
+    2. For each player bbox, we form a torso quadrilateral from those keypoints
+       (or fall back to a bbox heuristic if pose fails).
+    3. Sample N pixels inside the quad, convert each to LAB.
+    4. Each pixel votes for the nearest of two cluster centers (also in LAB).
+    5. The bbox label is the majority vote.
+
+Compared to HSV K-Means:
+    + Robust to black-vs-white kit confusion
+    + Pixel-level voting tolerates skin / shadow / hair pollution better
+      than averaging-then-classifying
+    - Requires a pose model (extra inference pass)
+    - Slower than HSV (~2x with default YOLOv8n-pose on CPU)
+
+The pose model is constructed lazily — it's not loaded unless this classifier
+is actually used.
+"""
+
+from __future__ import annotations
+
+from collections import defaultdict, deque
+from typing import Any, Deque, Dict, List, Optional, Tuple
+
+import cv2
+import numpy as np
+
+from football_log.vision.pose import (
+    PoseEstimator,
+    TorsoKeypoints,
+    match_pose_to_bbox,
+    torso_keypoints_from_bbox_heuristic,
+)
+
+
+# Saturation threshold for LAB sampling: pixels too close to neutral grey
+# (low chroma in the a/b channels) are dropped — they're likely shadow or
+# washed-out pixels rather than jersey.
+LAB_CHROMA_FLOOR = 8.0
+DEFAULT_NUM_SAMPLES = 80
+DEFAULT_HISTORY_LEN = 12
+DEFAULT_WARMUP_FRAMES = 50
+DEFAULT_MIN_SAMPLES = 20
+
+
+def _bgr_to_lab(bgr: Tuple[int, int, int]) -> np.ndarray:
+    pixel = np.array([[list(bgr)]], dtype=np.uint8)
+    lab = cv2.cvtColor(pixel, cv2.COLOR_BGR2LAB)
+    return lab[0, 0].astype(np.float32)
+
+
+def _sample_pixels_in_quad(
+    frame: np.ndarray,
+    quad: np.ndarray,
+    n_samples: int,
+) -> Optional[np.ndarray]:
+    """Return up to n_samples LAB pixels inside the quadrilateral.
+
+    Returns None if the quad is outside the frame, degenerate, or yields
+    fewer than 5 valid (sufficiently chromatic) pixels.
+    """
+    fh, fw = frame.shape[:2]
+    mask = np.zeros((fh, fw), dtype=np.uint8)
+    cv2.fillPoly(mask, [quad], 255)
+    ys, xs = np.nonzero(mask)
+    if len(ys) < 5:
+        return None
+    if len(ys) > n_samples:
+        sel = np.linspace(0, len(ys) - 1, n_samples).astype(int)
+        ys, xs = ys[sel], xs[sel]
+    bgr_pixels = frame[ys, xs]
+    lab_pixels = cv2.cvtColor(bgr_pixels.reshape(-1, 1, 3), cv2.COLOR_BGR2LAB).reshape(-1, 3).astype(np.float32)
+    chroma = np.hypot(lab_pixels[:, 1] - 128.0, lab_pixels[:, 2] - 128.0)
+    keep = chroma >= LAB_CHROMA_FLOOR
+    if int(keep.sum()) < 5:
+        # Fall back: use all pixels (kits with no chroma like black/white still
+        # have informative L values).
+        return lab_pixels
+    return lab_pixels[keep]
+
+
+def _vote_label(
+    samples: np.ndarray,
+    centers_lab: np.ndarray,
+    team_a: str,
+    team_b: str,
+    unknown: str,
+) -> str:
+    """Pixel-level majority vote between two LAB cluster centers."""
+    if centers_lab is None or len(samples) == 0:
+        return unknown
+    d0 = np.linalg.norm(samples - centers_lab[0], axis=1)
+    d1 = np.linalg.norm(samples - centers_lab[1], axis=1)
+    a_votes = int((d0 < d1).sum())
+    b_votes = int((d1 <= d0).sum())
+    total = a_votes + b_votes
+    if total == 0:
+        return unknown
+    margin = abs(a_votes - b_votes) / total
+    if margin < 0.10:
+        return unknown
+    return team_a if a_votes > b_votes else team_b
+
+
+class KeypointTeamClassifier:
+    """Pose-based team classifier — implements TeamClassifierProto."""
+
+    TEAM_A = "Team A"
+    TEAM_B = "Team B"
+    UNKNOWN = "Player"
+
+    def __init__(
+        self,
+        pose_estimator: Optional[Any] = None,
+        history_len: int = DEFAULT_HISTORY_LEN,
+        warmup_frames: int = DEFAULT_WARMUP_FRAMES,
+        min_samples: int = DEFAULT_MIN_SAMPLES,
+        num_pixel_samples: int = DEFAULT_NUM_SAMPLES,
+        team_colors: Optional[List[Tuple[int, int, int]]] = None,
+    ):
+        self._pose: Optional[Any] = pose_estimator  # lazily constructed if None
+        self._frame_pose_results: List[Tuple[Tuple[int, int, int, int], TorsoKeypoints]] = []
+        self._cached_frame_id: int = -1
+
+        self._history: Dict[int, Deque[str]] = defaultdict(lambda: deque(maxlen=history_len))
+        self._warmup_frames = warmup_frames
+        self._min_samples = min_samples
+        self._num_pixel_samples = num_pixel_samples
+        self._frame_count = 0
+
+        self._samples: List[np.ndarray] = []
+        self._centers: Optional[np.ndarray] = None
+        self._fitted = False
+
+        if team_colors is not None and len(team_colors) >= 2:
+            c0 = _bgr_to_lab(team_colors[0])
+            c1 = _bgr_to_lab(team_colors[1])
+            self._centers = np.vstack([c0, c1]).astype(np.float32)
+            self._fitted = True
+
+    # ------ lazy pose model ------
+
+    def _ensure_pose(self) -> Any:
+        if self._pose is None:
+            self._pose = PoseEstimator()
+        return self._pose
+
+    def update_pose_for_frame(self, frame: np.ndarray, frame_id: int) -> None:
+        """Run pose on this frame and cache results.
+
+        Caller is expected to invoke this once per frame before any
+        per-detection instant_label calls. If skipped, instant_label falls
+        back to the bbox-heuristic torso.
+        """
+        self._frame_pose_results = self._ensure_pose().predict(frame)
+        self._cached_frame_id = frame_id
+
+    # ------ TeamClassifierProto ------
+
+    def instant_label(self, frame: np.ndarray, bbox: Tuple[int, ...]) -> str:
+        bbox_t = (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))
+
+        # 1. Get torso keypoints — from pose if available, else heuristic.
+        kpts = match_pose_to_bbox(bbox_t, self._frame_pose_results)
+        if kpts is None or not kpts.is_complete:
+            kpts = torso_keypoints_from_bbox_heuristic(bbox_t)
+        quad = kpts.quadrilateral()
+        if quad is None:
+            return self.UNKNOWN
+
+        # 2. Sample pixels inside the torso quad → LAB.
+        samples = _sample_pixels_in_quad(frame, quad, self._num_pixel_samples)
+        if samples is None or len(samples) == 0:
+            return self.UNKNOWN
+
+        # 3. Warmup: collect mean LAB per bbox until we have enough samples.
+        if not self._fitted:
+            self._samples.append(samples.mean(axis=0))
+            self._frame_count += 1
+            if self._frame_count >= self._warmup_frames:
+                self._try_fit()
+            return self.UNKNOWN
+
+        # 4. Vote among torso pixels.
+        return _vote_label(
+            samples, self._centers, self.TEAM_A, self.TEAM_B, self.UNKNOWN
+        )
+
+    def smooth_label(self, track_id: int, instant_label: str) -> str:
+        if "Player" not in instant_label and "Team" not in instant_label:
+            return instant_label
+        history = self._history[track_id]
+        history.append(instant_label)
+        a_votes = sum(1 for x in history if x == self.TEAM_A)
+        b_votes = sum(1 for x in history if x == self.TEAM_B)
+        if a_votes > b_votes:
+            return self.TEAM_A
+        if b_votes > a_votes:
+            return self.TEAM_B
+        if a_votes == 0 and b_votes == 0:
+            return self.UNKNOWN
+        return instant_label
+
+    # ------ internals ------
+
+    def _try_fit(self) -> None:
+        if self._fitted or len(self._samples) < self._min_samples:
+            return
+        data = np.vstack(self._samples).astype(np.float32)
+        criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_MAX_ITER, 100, 0.2)
+        _, _, centers = cv2.kmeans(
+            data, 2, None, criteria, 20, cv2.KMEANS_PP_CENTERS,
+        )
+        # In LAB, two kits should differ by at least ~12 units in the (L, a, b)
+        # space to be confidently separable. Less and we're probably looking
+        # at noise on a single-kit sample (pre-kickoff warm-up?).
+        dist = float(np.linalg.norm(centers[0] - centers[1]))
+        if dist < 12.0:
+            print(f"[KeypointTeamClassifier] LAB cluster distance too small ({dist:.1f}); extending warmup")
+            return
+        self._centers = centers.astype(np.float32)
+        self._fitted = True
+        print(
+            f"[KeypointTeamClassifier] LAB K-Means fitted: "
+            f"A=({centers[0, 0]:.0f},{centers[0, 1]:.0f},{centers[0, 2]:.0f}), "
+            f"B=({centers[1, 0]:.0f},{centers[1, 1]:.0f},{centers[1, 2]:.0f}), "
+            f"distance={dist:.1f}, samples={len(self._samples)}"
+        )
+
+    @property
+    def is_fitted(self) -> bool:
+        return self._fitted
