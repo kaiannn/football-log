@@ -116,6 +116,12 @@ def build_parser() -> argparse.ArgumentParser:
         "降低跳跃/遮挡导致的米级跳变；仅在已配置 --homography 或 --camera-calib 时生效。"
         "输出额外 world_x_m_smoothed / world_y_m_smoothed 列。",
     )
+    p.add_argument(
+        "--save-video",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="将叠加标注后的视频保存为 <output-dir>/<name>_overlay.mp4",
+    )
 
     p.add_argument(
         "--team-classifier",
@@ -192,6 +198,7 @@ def main() -> None:
         referee_class_ids=_parse_int_list(args.referee_class_id),
         bev_smoothing=args.bev_smoothing,
         team_class_model=args.team_class_model,
+        save_video=args.save_video,
     )
     pipeline.run()
 

@@ -119,6 +119,7 @@ class VideoTrackerPipeline:
         referee_class_ids: Optional[List[int]] = None,
         bev_smoothing: bool = False,
         team_class_model: Optional[str] = None,
+        save_video: bool = False,
         # ------ 插件注入点 ------
         detector: Optional["Detector"] = None,
         team_cls: Optional["TeamClassifierProto"] = None,
@@ -282,6 +283,15 @@ class VideoTrackerPipeline:
             )
 
         self.last_tracked_detections: List[Detection] = []
+        self._video_writer: Optional[cv2.VideoWriter] = None
+        if save_video:
+            w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            out_path = str(Path(output_dir) / f"{stem}_overlay.mp4")
+            self._video_writer = cv2.VideoWriter(
+                out_path, cv2.VideoWriter_fourcc(*"mp4v"), self.fps, (w, h)
+            )
+            print(f"Recording overlay video → {out_path}")
 
     def request_stop(self) -> None:
         self._stop_requested = True
@@ -301,6 +311,8 @@ class VideoTrackerPipeline:
         )
 
         for frame, display, current, frame_idx in self._iter_frames():
+            if self._video_writer is not None:
+                self._video_writer.write(display)
             if self.show_ui:
                 cv2.imshow("Video Tracker", display)
                 key = cv2.waitKey(1 if self.is_camera else self.delay) & 0xFF
@@ -385,6 +397,8 @@ class VideoTrackerPipeline:
 
     def _finish(self) -> None:
         self.cap.release()
+        if self._video_writer is not None:
+            self._video_writer.release()
         self.data_writer.close()
         if self.show_ui:
             cv2.destroyAllWindows()
