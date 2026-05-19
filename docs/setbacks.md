@@ -101,9 +101,12 @@ Its Kalman state goes stale, and on the next detected frame the position has
 jumped enough that the tracker assigns a new ID. Result: a single player gets
 re-counted as multiple track IDs.
 
-**Why parked**: addressed structurally by Module 2 (DeepSORT replaces the
-built-in ultralytics tracker entirely, so we control how skipped frames are
-handled).
+**Fix (Module 2)**: `--tracker deepsort` uses `DeepSortTracker`
+(`football_log/vision/deepsort_tracker.py`), which calls YOLO in predict-only
+mode and drives a standalone `deep-sort-realtime` Kalman + Re-ID loop. Because
+the Kalman update fires only when `detect()` is called, skipped frames simply
+let lost tracks age out gracefully — no phantom ID reset on the next detected
+frame. Set `--tracker deepsort` when using `--detect-every-n > 1`.
 
 ### 2.2 HSV K-Means team classifier collapses on low-saturation kits
 

@@ -24,8 +24,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--tracker",
         default="bytetrack",
         help="跟踪器：bytetrack（默认，最快）/ botsort（更稳的镜头补偿）/ "
-        "botsort+reid（带 Re-ID，遮挡场景下 ID 更稳，比 ByteTrack 慢约 2x）。"
-        "也可直接传入自定义 yaml 路径。",
+        "botsort+reid（BotSORT + Re-ID，遮挡场景下 ID 更稳，比 ByteTrack 慢约 2x）/ "
+        "deepsort（独立 DeepSORT：YOLO 只做检测，外部 Kalman + Re-ID 做关联，"
+        "遮挡恢复最好，需 pip install deep-sort-realtime）。"
+        "也可直接传入自定义 yaml 路径（仅适用于 bytetrack/botsort 系列）。",
     )
     p.add_argument("--conf", type=float, default=0.3, help="检测置信度阈值")
     p.add_argument("--imgsz", type=int, default=640, help="推理输入尺寸")

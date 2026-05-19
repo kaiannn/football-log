@@ -155,6 +155,18 @@ class VideoTrackerPipeline:
 
         if detector is not None:
             self._detector = detector
+        elif tracker.strip().lower() == "deepsort":
+            from football_log.vision.deepsort_tracker import DeepSortTracker
+            ds = DeepSortTracker(
+                model_name=model_name,
+                conf=conf,
+                imgsz=imgsz,
+                player_class_ids=tuple(player_class_ids) if player_class_ids else (0,),
+                ball_class_ids=tuple(ball_class_ids) if ball_class_ids else (32,),
+                referee_class_ids=tuple(referee_class_ids) if referee_class_ids else None,
+            )
+            ds.set_team_classifier(self.team_classifier)
+            self._detector = ds
         else:
             yolo = YoloByteTrackTracker(
                 model_name=model_name,
@@ -259,7 +271,7 @@ class VideoTrackerPipeline:
     def run(self) -> None:
         det = self._detector
         model_info = "custom"
-        if isinstance(det, YoloByteTrackTracker):
+        if hasattr(det, "model"):
             m = det.model
             model_info = str(getattr(m, "ckpt_path", None) or getattr(m, "model_name", "yolo"))
         mode = "camera" if self.is_camera else "file"
