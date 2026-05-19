@@ -102,6 +102,14 @@ def main() -> None:
         default=None,
         help="Cap frames per sequence after stride (default: all)",
     )
+    parser.add_argument(
+        "--team-classes",
+        action="store_true",
+        help="Use 6-class team-aware map (Module 3B): "
+             "team_a_player / team_b_player / goalkeeper_a / goalkeeper_b / referee / ball. "
+             "Only valid for GSR-2025 format (requires team attributes in annotations). "
+             "Output goes to a separate directory so it does not overwrite the 3-class dataset.",
+    )
     args = parser.parse_args()
 
     fmt = _resolve_format(args.format, args.source_dir)
@@ -117,8 +125,15 @@ def main() -> None:
     if args.output_dir is None:
         parser.error("--output-dir is required (or pass --dry-run)")
 
-    class_map = load_class_map(args.class_map) if args.class_map else backend.default_class_map()
-    if args.class_map is None:
+    if args.team_classes:
+        if fmt != "gsr":
+            parser.error("--team-classes requires --format gsr (or auto-detected GSR-2025 data)")
+        class_map = gsr_convert.default_team_class_map()
+        print("[info] using 6-class team-aware map (Module 3B)", file=sys.stderr)
+    elif args.class_map:
+        class_map = load_class_map(args.class_map)
+    else:
+        class_map = backend.default_class_map()
         print("[warn] using built-in default class map; verify with --dry-run before committing", file=sys.stderr)
 
     result = backend.convert(

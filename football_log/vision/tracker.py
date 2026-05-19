@@ -51,6 +51,8 @@ class YoloByteTrackTracker:
         player_class_ids: Sequence[int] = (0,),
         ball_class_ids: Sequence[int] = (32,),
         referee_class_ids: Optional[Sequence[int]] = None,
+        team_a_class_ids: Optional[Sequence[int]] = None,
+        team_b_class_ids: Optional[Sequence[int]] = None,
     ):
         if YOLO is None:
             raise RuntimeError("未安装 ultralytics，请先执行: pip install ultralytics") from _import_error
@@ -61,6 +63,8 @@ class YoloByteTrackTracker:
         self.player_class_ids: Tuple[int, ...] = _coerce_ids(player_class_ids)
         self.ball_class_ids: Tuple[int, ...] = _coerce_ids(ball_class_ids)
         self.referee_class_ids: Tuple[int, ...] = _coerce_ids(referee_class_ids)
+        self.team_a_class_ids: Tuple[int, ...] = _coerce_ids(team_a_class_ids)
+        self.team_b_class_ids: Tuple[int, ...] = _coerce_ids(team_b_class_ids)
         self._team_classifier: Optional[TeamClassifier] = None
 
     def set_team_classifier(self, tc: Any) -> None:
@@ -68,7 +72,13 @@ class YoloByteTrackTracker:
 
     @property
     def all_class_ids(self) -> List[int]:
-        return list(self.player_class_ids + self.ball_class_ids + self.referee_class_ids)
+        return list(
+            self.player_class_ids
+            + self.ball_class_ids
+            + self.referee_class_ids
+            + self.team_a_class_ids
+            + self.team_b_class_ids
+        )
 
     # ------ Detector Protocol ------
 
@@ -102,6 +112,11 @@ class YoloByteTrackTracker:
             return "Ball", None
         if obj_cls in self.referee_class_ids:
             return "Referee", None
+        # Module 3B: team label comes directly from the 6-class detector
+        if obj_cls in self.team_a_class_ids:
+            return "Team A", get_dominant_color(frame, bbox)
+        if obj_cls in self.team_b_class_ids:
+            return "Team B", get_dominant_color(frame, bbox)
 
         # Default branch: treat as a player and run team classification if available.
         tc = self._team_classifier

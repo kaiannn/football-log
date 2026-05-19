@@ -167,7 +167,8 @@ class ClassMap:
     input_to_output: Dict[int, str]
     output_classes: List[str]
 
-    def output_index(self, source_cls: int) -> Optional[int]:
+    def output_index(self, source_cls: int, team: Optional[str] = None) -> Optional[int]:
+        # team is unused for 3-class maps; present for uniform call sites with TeamClassMap
         name = self.input_to_output.get(source_cls)
         if name is None:
             return None

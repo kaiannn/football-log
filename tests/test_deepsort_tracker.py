@@ -38,6 +38,8 @@ def _make_tracker(
     t.player_class_ids = tuple(player_ids)
     t.ball_class_ids = tuple(ball_ids)
     t.referee_class_ids = tuple(referee_ids)
+    t.team_a_class_ids = ()
+    t.team_b_class_ids = ()
     t._team_classifier = tc
     return t
 

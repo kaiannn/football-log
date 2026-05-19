@@ -66,6 +66,8 @@ class DeepSortTracker:
         player_class_ids: Sequence[int] = (0,),
         ball_class_ids: Sequence[int] = (32,),
         referee_class_ids: Optional[Sequence[int]] = None,
+        team_a_class_ids: Optional[Sequence[int]] = None,
+        team_b_class_ids: Optional[Sequence[int]] = None,
     ):
         if YOLO is None:
             raise RuntimeError(
@@ -96,6 +98,8 @@ class DeepSortTracker:
         self.player_class_ids: Tuple[int, ...] = _coerce_ids(player_class_ids)
         self.ball_class_ids: Tuple[int, ...] = _coerce_ids(ball_class_ids)
         self.referee_class_ids: Tuple[int, ...] = _coerce_ids(referee_class_ids)
+        self.team_a_class_ids: Tuple[int, ...] = _coerce_ids(team_a_class_ids)
+        self.team_b_class_ids: Tuple[int, ...] = _coerce_ids(team_b_class_ids)
         self._team_classifier: Optional[Any] = None
 
     def set_team_classifier(self, tc: Any) -> None:
@@ -103,7 +107,13 @@ class DeepSortTracker:
 
     @property
     def all_class_ids(self) -> List[int]:
-        return list(self.player_class_ids + self.ball_class_ids + self.referee_class_ids)
+        return list(
+            self.player_class_ids
+            + self.ball_class_ids
+            + self.referee_class_ids
+            + self.team_a_class_ids
+            + self.team_b_class_ids
+        )
 
     # ------ Detector Protocol ------
 
@@ -173,6 +183,10 @@ class DeepSortTracker:
             return "Ball", None
         if obj_cls in self.referee_class_ids:
             return "Referee", None
+        if obj_cls in self.team_a_class_ids:
+            return "Team A", get_dominant_color(frame, bbox)
+        if obj_cls in self.team_b_class_ids:
+            return "Team B", get_dominant_color(frame, bbox)
 
         tc = self._team_classifier
         if tc is not None:

@@ -40,6 +40,8 @@ def _make_tracker(
     t.player_class_ids = tuple(player_ids)
     t.ball_class_ids = tuple(ball_ids)
     t.referee_class_ids = tuple(referee_ids)
+    t.team_a_class_ids = ()
+    t.team_b_class_ids = ()
     t._team_classifier = tc
     return t
 
@@ -112,10 +114,50 @@ def test_all_class_ids_property_returns_union():
 
 
 def test_unknown_class_falls_through_as_player():
-    """Class IDs not in ball/referee sets are treated as players (defensive default)."""
+    """Class IDs not in any named set are treated as players (defensive default)."""
     tc = _RecordingTeamClassifier()
     t = _make_tracker(player_ids=(0,), ball_ids=(32,), referee_ids=(), tc=tc)
 
-    # Class 99 isn't explicitly in any list — falls into the player branch.
     label, _ = t._assign_label(99, _frame(), (5, 5, 10, 20), track_id=1)
     assert label == "Team A"
+
+
+def test_team_a_class_id_returns_team_a_directly():
+    tc = _RecordingTeamClassifier()
+    t = _make_tracker(player_ids=(), ball_ids=(5,), referee_ids=(4,), tc=tc)
+    t.team_a_class_ids = (0, 2)
+    t.team_b_class_ids = (1, 3)
+
+    label, color = t._assign_label(0, _frame(), (5, 5, 10, 20), track_id=1)
+    assert label == "Team A"
+    assert tc.instant_calls == []   # classifier not called
+
+    label2, _ = t._assign_label(2, _frame(), (5, 5, 10, 20), track_id=2)
+    assert label2 == "Team A"  # goalkeeper_a also → Team A
+
+
+def test_team_b_class_id_returns_team_b_directly():
+    tc = _RecordingTeamClassifier()
+    t = _make_tracker(player_ids=(), ball_ids=(5,), referee_ids=(4,), tc=tc)
+    t.team_a_class_ids = (0, 2)
+    t.team_b_class_ids = (1, 3)
+
+    label, _ = t._assign_label(1, _frame(), (5, 5, 10, 20), track_id=3)
+    assert label == "Team B"
+
+    label2, _ = t._assign_label(3, _frame(), (5, 5, 10, 20), track_id=4)
+    assert label2 == "Team B"  # goalkeeper_b also → Team B
+
+
+def test_6class_full_layout_all_six_classes():
+    """Full Module 3B class layout: 0=team_a, 1=team_b, 2=gk_a, 3=gk_b, 4=ref, 5=ball."""
+    t = _make_tracker(player_ids=(), ball_ids=(5,), referee_ids=(4,), tc=None)
+    t.team_a_class_ids = (0, 2)
+    t.team_b_class_ids = (1, 3)
+
+    assert t._assign_label(0, _frame(), (5, 5, 10, 20), 1)[0] == "Team A"
+    assert t._assign_label(1, _frame(), (5, 5, 10, 20), 2)[0] == "Team B"
+    assert t._assign_label(2, _frame(), (5, 5, 10, 20), 3)[0] == "Team A"
+    assert t._assign_label(3, _frame(), (5, 5, 10, 20), 4)[0] == "Team B"
+    assert t._assign_label(4, _frame(), (5, 5, 10, 20), 5)[0] == "Referee"
+    assert t._assign_label(5, _frame(), (5, 5, 10, 10), 6)[0] == "Ball"

@@ -74,6 +74,7 @@ except ImportError:
     Image = None  # type: ignore
 
 from football_log.data.yolo_convert import ClassMap
+from typing import Union as _Union
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +91,8 @@ class GsrAnnotation:
     y: float
     w: float
     h: float
+    team: Optional[str] = None   # "left" | "right" | None
+    role: Optional[str] = None   # "player" | "goalkeeper" | None
 
 
 @dataclass
@@ -132,6 +135,7 @@ def _parse_labels_json(path: Path) -> Tuple[List[GsrImage], List[GsrAnnotation],
         if not isinstance(bbox, dict):
             continue
         try:
+            attrs = a.get("attributes") or {}
             anns.append(GsrAnnotation(
                 image_id=str(a["image_id"]),
                 track_id=int(a.get("track_id", -1)),
@@ -140,6 +144,8 @@ def _parse_labels_json(path: Path) -> Tuple[List[GsrImage], List[GsrAnnotation],
                 y=float(bbox["y"]),
                 w=float(bbox["w"]),
                 h=float(bbox["h"]),
+                team=str(attrs["team"]).lower() if "team" in attrs else None,
+                role=str(attrs["role"]).lower() if "role" in attrs else None,
             ))
         except (KeyError, TypeError, ValueError):
             continue
@@ -189,6 +195,70 @@ def default_class_map() -> ClassMap:
     return ClassMap(
         input_to_output={1: "player", 2: "player", 3: "referee", 4: "ball"},
         output_classes=["player", "ball", "referee"],
+    )
+
+
+@dataclass
+class TeamClassMap:
+    """6-class map keyed on (category_id, team) for Module 3B team-as-class detection.
+
+    Source category_id × team → output class:
+      (1, "left")  → team_a_player
+      (1, "right") → team_b_player
+      (2, "left")  → goalkeeper_a
+      (2, "right") → goalkeeper_b
+      (3, None)    → referee   (no team label)
+      (4, None)    → ball      (no team label)
+
+    A (category_id, None) entry acts as a wildcard — used when the annotation
+    has no team attribute (referees, ball).
+    """
+
+    map_: Dict[Tuple[int, Optional[str]], str]
+    output_classes: List[str]
+
+    def output_index(self, source_cls: int, team: Optional[str] = None) -> Optional[int]:
+        name = self.map_.get((source_cls, team))
+        if name is None:
+            name = self.map_.get((source_cls, None))  # wildcard fallback
+        if name is None:
+            return None
+        try:
+            return self.output_classes.index(name)
+        except ValueError:
+            return None
+
+    @property
+    def input_to_output(self) -> Dict[str, str]:
+        """Serialisable form for manifest.json."""
+        return {f"{k[0]}:{k[1] or '*'}": v for k, v in self.map_.items()}
+
+
+def default_team_class_map() -> TeamClassMap:
+    """Default 6-class mapping using GSR-2025 team labels (Module 3B).
+
+    Output class order (YOLO indices):
+      0 = team_a_player   (field players, left team)
+      1 = team_b_player   (field players, right team)
+      2 = goalkeeper_a    (goalkeeper, left team)
+      3 = goalkeeper_b    (goalkeeper, right team)
+      4 = referee
+      5 = ball
+    """
+    return TeamClassMap(
+        map_={
+            (1, "left"):  "team_a_player",
+            (1, "right"): "team_b_player",
+            (2, "left"):  "goalkeeper_a",
+            (2, "right"): "goalkeeper_b",
+            (3, None):    "referee",
+            (4, None):    "ball",
+        },
+        output_classes=[
+            "team_a_player", "team_b_player",
+            "goalkeeper_a", "goalkeeper_b",
+            "referee", "ball",
+        ],
     )
 
 
@@ -245,7 +315,7 @@ def _link_or_copy(src: Path, dst: Path, copy: bool) -> None:
         os.symlink(src.resolve(), dst)
 
 
-def _write_yaml(out_dir: Path, class_map: ClassMap) -> None:
+def _write_yaml(out_dir: Path, class_map: "_Union[ClassMap, TeamClassMap]") -> None:
     yaml_path = out_dir / "soccernet.yaml"
     lines = [
         f"path: {out_dir.resolve()}",
@@ -273,7 +343,7 @@ def _frame_num_from_filename(file_name: str) -> Optional[int]:
 def convert(
     source_dir: Path,
     output_dir: Path,
-    class_map: ClassMap,
+    class_map: "_Union[ClassMap, TeamClassMap]",
     split_ratios: Tuple[float, float, float] = (0.7, 0.15, 0.15),
     seed: int = 0,
     copy_images: bool = False,
@@ -336,7 +406,7 @@ def convert(
             frame_anns = anns_by_image.get(im.image_id, [])
             label_lines: List[str] = []
             for a in frame_anns:
-                idx = class_map.output_index(a.category_id)
+                idx = class_map.output_index(a.category_id, a.team)
                 if idx is None:
                     result.n_rows_skipped_unknown_class += 1
                     continue
@@ -392,7 +462,9 @@ def convert(
 def dry_run(source_dir: Path) -> Dict[str, object]:
     seqs = discover_sequences(source_dir)
     counts: Counter = Counter()
+    team_counts: Counter = Counter()
     role_counts: Counter = Counter()
+    team_role_counts: Counter = Counter()
     total = 0
     cat_id_to_name: Dict[int, str] = {}
     for seq in seqs:
@@ -403,12 +475,21 @@ def dry_run(source_dir: Path) -> Dict[str, object]:
                 continue
         for a in seq.annotations:
             counts[a.category_id] += 1
+            if a.team:
+                team_counts[a.team] += 1
+            if a.role:
+                role_counts[a.role] += 1
+            if a.team and a.role:
+                team_role_counts[f"{a.team}:{a.role}"] += 1
             total += 1
     summary: Dict[str, object] = {
         "n_sequences": len(seqs),
         "sequences": [s.name for s in seqs[:20]] + (["..."] if len(seqs) > 20 else []),
         "class_id_counts": dict(sorted(counts.items())),
         "category_id_to_name": cat_id_to_name,
+        "team_distribution": dict(team_counts),
+        "role_distribution": dict(role_counts),
+        "team_role_distribution": dict(team_role_counts),
         "n_rows_total": total,
     }
     return summary

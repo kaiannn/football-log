@@ -118,6 +118,7 @@ class VideoTrackerPipeline:
         ball_class_ids: Optional[List[int]] = None,
         referee_class_ids: Optional[List[int]] = None,
         bev_smoothing: bool = False,
+        team_class_model: Optional[str] = None,
         # ------ 插件注入点 ------
         detector: Optional["Detector"] = None,
         team_cls: Optional["TeamClassifierProto"] = None,
@@ -155,6 +156,23 @@ class VideoTrackerPipeline:
 
         if detector is not None:
             self._detector = detector
+        elif team_class_model:
+            # Module 3B: 6-class YOLO encodes team directly — no separate team classifier.
+            # Class layout from default_team_class_map():
+            #   0=team_a_player  1=team_b_player  2=goalkeeper_a  3=goalkeeper_b
+            #   4=referee  5=ball
+            yolo = YoloByteTrackTracker(
+                model_name=team_class_model,
+                conf=conf,
+                imgsz=imgsz,
+                tracker=tracker,
+                player_class_ids=(),
+                ball_class_ids=(5,),
+                referee_class_ids=(4,),
+                team_a_class_ids=(0, 2),
+                team_b_class_ids=(1, 3),
+            )
+            self._detector = yolo
         elif tracker.strip().lower() == "deepsort":
             from football_log.vision.deepsort_tracker import DeepSortTracker
             ds = DeepSortTracker(

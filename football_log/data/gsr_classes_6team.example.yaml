@@ -1,0 +1,29 @@
+# Module 3B class map: team-as-class detection for SoccerNet GSR-2025.
+#
+# Each player bbox is labelled by team AND role, giving 6 output classes.
+# GSR-2025 source attributes:
+#   category_id 1 = field player  (attributes.team = "left" | "right")
+#   category_id 2 = goalkeeper    (attributes.team = "left" | "right")
+#   category_id 3 = referee       (no team attribute)
+#   category_id 4 = ball          (no team attribute)
+#
+# "left" / "right" refer to which side of the pitch each team starts on
+# in a given sequence — not a fixed team identity. For evaluation, the
+# mapping left→Team A / right→Team B is consistent within each sequence.
+#
+# Usage:
+#   python scripts/prepare_yolo_dataset.py \
+#       --source-dir data/gsr2025/extracted \
+#       --output-dir data/soccernet_6class \
+#       --team-classes
+#
+# NOTE: this file is documentation only. Pass --team-classes to the
+# converter; the mapping is hard-coded in default_team_class_map().
+
+output_classes:
+  - team_a_player   # 0  (category_id=1, team="left")
+  - team_b_player   # 1  (category_id=1, team="right")
+  - goalkeeper_a    # 2  (category_id=2, team="left")
+  - goalkeeper_b    # 3  (category_id=2, team="right")
+  - referee         # 4  (category_id=3)
+  - ball            # 5  (category_id=4)

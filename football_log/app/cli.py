@@ -130,6 +130,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="手动指定两队 BGR 颜色，格式 'B,G,R;B,G,R'，如 '255,255,255;0,255,255'（白 vs 黄）；"
         "未提供则自动 K-Means 聚类",
     )
+    p.add_argument(
+        "--team-class-model",
+        default=None,
+        help="Module 3B：6-class YOLO 权重路径（team_a_player / team_b_player / "
+        "goalkeeper_a / goalkeeper_b / referee / ball）。"
+        "设置后将替代 --model 做全帧检测 + 分队；无需单独指定 class ID flags。"
+        "示例：runs/module3b_v1/weights/best.pt",
+    )
     return p
 
 
@@ -183,6 +191,7 @@ def main() -> None:
         ball_class_ids=_parse_int_list(args.ball_class_id),
         referee_class_ids=_parse_int_list(args.referee_class_id),
         bev_smoothing=args.bev_smoothing,
+        team_class_model=args.team_class_model,
     )
     pipeline.run()
 
