@@ -65,22 +65,31 @@ def _label_color(label: str) -> tuple:
     return (0, 255, 255)
 
 
+def _draw_badge(frame, text: str, x: int, y: int, bg: tuple) -> None:
+    """Draw a filled pill-shaped label chip like Image 3 (e.g. '#21')."""
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    scale, thick = 0.42, 1
+    (tw, th), baseline = cv2.getTextSize(text, font, scale, thick)
+    pad_x, pad_y = 4, 3
+    bx1, by1 = x, y - th - pad_y * 2 - baseline
+    bx2, by2 = x + tw + pad_x * 2, y
+    # Clamp to frame
+    bx1, by1 = max(0, bx1), max(0, by1)
+    bx2, by2 = min(frame.shape[1] - 1, bx2), min(frame.shape[0] - 1, by2)
+    cv2.rectangle(frame, (bx1, by1), (bx2, by2), bg, -1, cv2.LINE_AA)
+    cv2.putText(frame, text, (bx1 + pad_x, by2 - baseline - 1), font, scale, (255, 255, 255), thick, cv2.LINE_AA)
+
+
 def draw_tracking_overlay(frame, tracked_objects: List[Dict[str, Any]]) -> None:
     for obj in tracked_objects:
         x, y, w, h = [int(v) for v in obj["bbox"]]
         label = obj["label"]
         color = obj.get("box_color") or _label_color(label)
-        cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
-        conf = obj.get("conf", 0)
-        cv2.putText(
-            frame,
-            f"ID {obj['id']} {label} {conf:.2f}",
-            (x, max(20, y - 8)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            color,
-            2,
-        )
+        # Thinner box — less visual clutter
+        cv2.rectangle(frame, (x, y), (x + w, y + h), color, 1)
+        # Badge chip above the box
+        tid = obj.get("id", obj.get("track_id", ""))
+        _draw_badge(frame, f"#{tid}", x, y - 2, color)
 
 
 def draw_frame_hud(frame, frame_idx: int, detect_every_n: int) -> None:

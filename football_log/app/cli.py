@@ -2,10 +2,15 @@
 
 import argparse
 import os
+from pathlib import Path
 from typing import List, Optional
 
 from football_log.app.runner import VideoTrackerPipeline
 from football_log.world.pitch_model import PitchSpec
+
+_MODULE1_WEIGHTS = "runs/module1_v1/weights/best.pt"
+_DEFAULT_MODEL = _MODULE1_WEIGHTS if Path(_MODULE1_WEIGHTS).is_file() else "yolov8n.pt"
+_MODULE1_CLASS_IDS = {"player": "0", "ball": "1", "referee": "2"}
 
 
 def _parse_int_list(raw: Optional[str]) -> Optional[List[int]]:
@@ -19,7 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--video", required=True, help="输入视频路径，或 'cam' / 'cam:0' 使用摄像头")
     p.add_argument("--output-dir", default="outputs", help="输出目录，默认 outputs")
     p.add_argument("--output-format", default="both", choices=["jsonl", "csv", "both"], help="输出格式")
-    p.add_argument("--model", default="yolov8n.pt", help="YOLO 模型权重")
+    p.add_argument("--model", default=_DEFAULT_MODEL, help="YOLO 模型权重")
     p.add_argument(
         "--tracker",
         default="bytetrack",
@@ -122,6 +127,30 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="将叠加标注后的视频保存为 <output-dir>/<name>_overlay.mp4",
     )
+    p.add_argument(
+        "--save-radar",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="将俯视雷达视频保存为 <output-dir>/<name>_radar.mp4",
+    )
+    p.add_argument(
+        "--pitch-keypoint-model",
+        default=None,
+        help="Roboflow pitch keypoint 模型路径（32点检测，提升雷达精度和世界坐标准确性）。"
+        "示例：runs/roboflow/football-pitch-detection.pt",
+    )
+    p.add_argument(
+        "--ball-model",
+        default=None,
+        help="专用球检测模型路径（替代主跟踪器的球检测，提升小目标召回率）。"
+        "示例：runs/roboflow/football-ball-detection.pt",
+    )
+    p.add_argument(
+        "--ball-slicer",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="对专用球检测模型启用 InferenceSlicer 分块检测（精度更高但更慢，需安装 supervision）",
+    )
 
     p.add_argument(
         "--team-classifier",
@@ -172,6 +201,19 @@ def main() -> None:
 
     team_colors = _parse_team_colors(args.team_colors)
 
+    # When Module 1 weights are active and the user hasn't explicitly set class IDs,
+    # apply the Module 1 class mapping automatically (player=0, ball=1, referee=2).
+    using_module1 = args.model == _MODULE1_WEIGHTS
+    player_ids = _parse_int_list(args.player_class_id) or (
+        _parse_int_list(_MODULE1_CLASS_IDS["player"]) if using_module1 else None
+    )
+    ball_ids = _parse_int_list(args.ball_class_id) or (
+        _parse_int_list(_MODULE1_CLASS_IDS["ball"]) if using_module1 else None
+    )
+    referee_ids = _parse_int_list(args.referee_class_id) or (
+        _parse_int_list(_MODULE1_CLASS_IDS["referee"]) if using_module1 else None
+    )
+
     pipeline = VideoTrackerPipeline(
         video_path=args.video,
         output_dir=args.output_dir,
@@ -193,12 +235,16 @@ def main() -> None:
         pitch_field_filter_tracks=args.pitch_field_filter_tracks,
         team_colors=team_colors,
         team_classifier_kind=args.team_classifier,
-        player_class_ids=_parse_int_list(args.player_class_id),
-        ball_class_ids=_parse_int_list(args.ball_class_id),
-        referee_class_ids=_parse_int_list(args.referee_class_id),
+        player_class_ids=player_ids,
+        ball_class_ids=ball_ids,
+        referee_class_ids=referee_ids,
         bev_smoothing=args.bev_smoothing,
         team_class_model=args.team_class_model,
         save_video=args.save_video,
+        save_radar=args.save_radar,
+        pitch_keypoint_model=args.pitch_keypoint_model,
+        ball_model=args.ball_model,
+        ball_slicer=args.ball_slicer,
     )
     pipeline.run()
 

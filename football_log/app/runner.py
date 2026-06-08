@@ -21,7 +21,8 @@ from football_log.pitch.field_estimator import PitchFieldEstimator, TemporalPitc
 from football_log.pitch.integration import filter_objects_in_grass_mask
 from football_log.pitch.observation import PitchObservation
 from football_log.protocols import Detection
-from football_log.ui.overlay import draw_frame_hud, draw_pitch_observation, draw_tracking_overlay
+from football_log.ui.overlay import draw_frame_hud, draw_tracking_overlay
+from football_log.ui.radar import RadarRenderer
 from football_log.vision.team_classifier import TeamClassifier
 from football_log.vision.team_classifier_keypoint import KeypointTeamClassifier
 from football_log.vision.tracker import YoloByteTrackTracker
@@ -120,6 +121,10 @@ class VideoTrackerPipeline:
         bev_smoothing: bool = False,
         team_class_model: Optional[str] = None,
         save_video: bool = False,
+        save_radar: bool = False,
+        pitch_keypoint_model: Optional[str] = None,
+        ball_model: Optional[str] = None,
+        ball_slicer: bool = False,
         # ------ 插件注入点 ------
         detector: Optional["Detector"] = None,
         team_cls: Optional["TeamClassifierProto"] = None,
@@ -129,17 +134,22 @@ class VideoTrackerPipeline:
     ):
         self.video_path = video_path
         source, self.is_camera = _parse_video_source(video_path)
-        self.cap = cv2.VideoCapture(source)
-        if not self.cap.isOpened():
+        # Defer VideoCapture open until after all model loading — on macOS/AVFoundation
+        # the file handle can be dropped while PyTorch/Metal initialises CUDA/MPS.
+        self._video_source = source
+
+        # Probe FPS before models load (file stays closed after probe).
+        _probe = cv2.VideoCapture(source)
+        if not _probe.isOpened():
             kind = "摄像头" if self.is_camera else "视频文件"
             raise SystemExit(f"无法打开{kind}: {video_path}")
-
         if self.is_camera:
-            self.fps = self.cap.get(cv2.CAP_PROP_FPS)
+            self.fps = _probe.get(cv2.CAP_PROP_FPS)
             if not self.fps or self.fps <= 0:
                 self.fps = 30.0
         else:
-            self.fps = self.cap.get(cv2.CAP_PROP_FPS) or 25
+            self.fps = _probe.get(cv2.CAP_PROP_FPS) or 25
+        _probe.release()
         self.delay = int(1000 / self.fps)
         self.show_ui = show_ui
         self.detect_every_n = max(1, detect_every_n)
@@ -283,18 +293,61 @@ class VideoTrackerPipeline:
             )
 
         self.last_tracked_detections: List[Detection] = []
+        self._save_video = save_video
+        self._save_radar = save_radar
+        self._output_dir = output_dir
+        self._stem = stem
         self._video_writer: Optional[cv2.VideoWriter] = None
-        if save_video:
+        self._radar_renderer: Optional[RadarRenderer] = None
+        self._radar_writer: Optional[cv2.VideoWriter] = None
+
+        # Pitch keypoint detector — replaces grass-mask quad for homography when set.
+        self._pitch_kp_detector = None
+        if pitch_keypoint_model:
+            from football_log.vision.pitch_keypoint_detector import PitchKeypointDetector
+            self._pitch_kp_detector = PitchKeypointDetector(pitch_keypoint_model, imgsz=imgsz)
+            print(f"Pitch keypoint model → {pitch_keypoint_model}")
+
+        # Dedicated ball detector — overrides main tracker's ball detections when set.
+        self._ball_detector = None
+        if ball_model:
+            from football_log.vision.ball_detector import BallDetector
+            self._ball_detector = BallDetector(ball_model, conf=conf, imgsz=imgsz, slicer=ball_slicer)
+            print(f"Ball detection model → {ball_model}{' (slicer)' if ball_slicer else ''}")
+
+        # Shared H from keypoint model (smoothed via EMA).
+        self._kp_H: Optional[np.ndarray] = None
+        self._kp_alpha: float = 0.3  # EMA smoothing
+        self._stop_requested = False
+
+        # Open VideoCapture LAST — after all model init — to avoid AVFoundation
+        # dropping the file handle during PyTorch/MPS/Metal initialisation on macOS.
+        self.cap = cv2.VideoCapture(self._video_source, cv2.CAP_FFMPEG)
+        if not self.cap.isOpened():
+            kind = "摄像头" if self.is_camera else "视频文件"
+            raise SystemExit(f"无法打开{kind}: {video_path}")
+
+        # Open video writers NOW that we have cap dimensions.
+        if self._save_video:
             w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            out_path = str(Path(output_dir) / f"{stem}_overlay.mp4")
+            out_path = str(Path(self._output_dir) / f"{self._stem}_overlay.mp4")
             self._video_writer = cv2.VideoWriter(
                 out_path, cv2.VideoWriter_fourcc(*"mp4v"), self.fps, (w, h)
             )
             print(f"Recording overlay video → {out_path}")
 
-    def request_stop(self) -> None:
-        self._stop_requested = True
+        if self._save_radar:
+            from football_log.ui.radar import _CANVAS_W, _CANVAS_H
+            radar_path = str(Path(self._output_dir) / f"{self._stem}_radar.mp4")
+            self._radar_renderer = RadarRenderer(
+                pitch_length_m=self.pitch.length_m,
+                pitch_width_m=self.pitch.width_m,
+            )
+            self._radar_writer = cv2.VideoWriter(
+                radar_path, cv2.VideoWriter_fourcc(*"mp4v"), self.fps, (_CANVAS_W, _CANVAS_H)
+            )
+            print(f"Recording radar video → {radar_path}")
 
     def run(self) -> None:
         det = self._detector
@@ -311,8 +364,6 @@ class VideoTrackerPipeline:
         )
 
         for frame, display, current, frame_idx in self._iter_frames():
-            if self._video_writer is not None:
-                self._video_writer.write(display)
             if self.show_ui:
                 cv2.imshow("Video Tracker", display)
                 key = cv2.waitKey(1 if self.is_camera else self.delay) & 0xFF
@@ -360,7 +411,45 @@ class VideoTrackerPipeline:
                         filtered_ids = {o["id"] for o in filtered}
                         detections = [d for d in detections if d.track_id in filtered_ids]
 
+            # Pitch keypoint model: runs at pitch_field_every_n cadence.
+            # Produces a homography that overrides the grass-mask quad in the radar
+            # and populates world coords for all detections.
+            if self._pitch_kp_detector is not None:
+                if self.frame_idx % self.pitch_field_every_n == 0 or self._kp_H is None:
+                    H_new, _, _ = self._pitch_kp_detector.detect(frame)
+                    if H_new is not None:
+                        if self._kp_H is None:
+                            self._kp_H = H_new
+                        else:
+                            self._kp_H = self._kp_alpha * H_new + (1 - self._kp_alpha) * self._kp_H
+
+            # Dedicated ball detector: runs on detect frames, merges result.
+            if self._ball_detector is not None and should_detect:
+                ball_dets = self._ball_detector.detect(frame)
+                if ball_dets:
+                    from football_log.protocols import Detection as _Det
+                    # Remove any ball detections from main tracker for this frame.
+                    detections = [d for d in detections if "Ball" not in d.label]
+                    bd = ball_dets[0]
+                    x, y, w, h = bd["bbox"]
+                    detections.append(_Det(
+                        track_id=-1,  # dedicated ball gets id -1 (no ByteTrack ID)
+                        bbox=(x, y, w, h),
+                        label="Ball",
+                        conf=bd["conf"],
+                    ))
+
             detections = _enrich_detections(detections, self._projector)
+            # If no calibrated projector, use keypoint H for world coords.
+            if self._projector is None and self._kp_H is not None:
+                for det in detections:
+                    foot = np.array([[[
+                        float(det.bbox[0] + det.bbox[2] / 2),
+                        float(det.bbox[1] + det.bbox[3]),
+                    ]]], dtype=np.float32)
+                    pt = cv2.perspectiveTransform(foot, self._kp_H)
+                    det.world_x_m = float(pt[0, 0, 0])
+                    det.world_y_m = float(pt[0, 0, 1])
             if self._track_filter is not None:
                 for det in detections:
                     if det.world_x_m is None or det.world_y_m is None:
@@ -387,10 +476,21 @@ class VideoTrackerPipeline:
 
             current_dicts = [d.to_dict() for d in detections]
             display = frame.copy()
-            if self.pitch_field_detect and self._last_pitch_obs is not None:
-                draw_pitch_observation(display, self._last_pitch_obs)
             draw_tracking_overlay(display, current_dicts)
             draw_frame_hud(display, self.frame_idx, self.detect_every_n)
+
+            if self._video_writer is not None:
+                self._video_writer.write(display)
+            if self._radar_renderer is not None and self._radar_writer is not None:
+                if self._kp_H is not None:
+                    self._radar_renderer.set_homography(self._kp_H)
+                    quad = None
+                else:
+                    quad = self._last_pitch_obs.field_quad_xy if self._last_pitch_obs is not None else None
+                radar_img = self._radar_renderer.render(
+                    current_dicts, field_quad_xy=quad, frame_shape=frame.shape
+                )
+                self._radar_writer.write(radar_img)
 
             yield frame, display, current_dicts, self.frame_idx
             self.frame_idx += 1
@@ -399,6 +499,8 @@ class VideoTrackerPipeline:
         self.cap.release()
         if self._video_writer is not None:
             self._video_writer.release()
+        if self._radar_writer is not None:
+            self._radar_writer.release()
         self.data_writer.close()
         if self.show_ui:
             cv2.destroyAllWindows()
