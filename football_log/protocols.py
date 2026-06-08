@@ -1,9 +1,20 @@
 """流水线各环节的接口协议与统一数据结构。
 
-第三方只需实现对应 Protocol 即可替换默认组件，例如：
-- 用 RT-DETR 替代 YOLO → 实现 Detector
-- 用 Re-ID 方案替代 K-Means → 实现 TeamClassifierProto
-- 用 TVCalib 替代 Homography → 实现 WorldProjector
+第三方只需实现对应 Protocol 即可替换默认组件：
+
+  Protocol               默认实现                           替换场景
+  ──────────────────────────────────────────────────────────────────────────
+  Detector               YoloByteTrackTracker               RT-DETR、DeepSORT、6-class 分队模型
+  TeamClassifierProto    TeamClassifier (HSV K-Means)       KeypointTeamClassifier、SAM
+  PitchEstimator         PitchFieldEstimator                自定义线检测
+  WorldProjector         HomographyProjector                PinholeGroundProjector、AutoCalibrationProjector
+  PitchCalibratorProto   PitchKeypointDetector (32pt pose)  TVCalib、SoccerNet Camera Calibration
+  BallDetectorProto      BallDetector (Roboflow ball model)  专用小目标模型、InferenceSlicer
+  Exporter               TrackingDataWriter (JSONL/CSV)     数据库写入、实时推流
+
+注：BallDetector 当前实现的 detect() 返回 List[dict] 而非 List[Detection]，
+是已知的类型偏差——运行时正常，mypy 会提示。后续统一时改该实现即可，
+无需改 Protocol 定义。
 """
 
 from __future__ import annotations
@@ -125,3 +136,51 @@ class Exporter(Protocol):
 
     @property
     def records_written(self) -> int: ...
+
+
+@runtime_checkable
+class BallDetectorProto(Protocol):
+    """专用球检测器：输入一帧图像，返回最多一个球的检测结果。
+
+    与 Detector 的区别：只检测球，不做跟踪，不返回 track_id；结果用于
+    覆盖主 Detector 输出的球检测，提升小目标召回率。
+
+    默认实现: football_log.vision.ball_detector.BallDetector
+    替换场景: 不同供应商的专用球模型、InferenceSlicer 分块检测
+
+    NOTE: 当前 BallDetector.detect() 返回 List[dict]（已知类型偏差）。
+    运行时正常；后续统一数据结构时只需改实现，不改本 Protocol。
+    """
+
+    def detect(self, frame: np.ndarray) -> List[Detection]:
+        """返回检测到的球，通常只有 0 或 1 个元素。track_id 可为 -1。"""
+        ...
+
+
+@runtime_checkable
+class PitchCalibratorProto(Protocol):
+    """逐帧场地标定器：从图像中估计像素→世界坐标的单应矩阵（H 的生产者）。
+
+    与 WorldProjector 的区别：
+    - WorldProjector: 持有已有 H，对每个 bbox 做坐标投影（消费者）
+    - PitchCalibratorProto: 从当前帧视觉内容中估计新的 H（生产者）
+
+    两者配合使用：PitchCalibratorProto 每 N 帧更新 H，
+    WorldProjector（或 runner 直接）用该 H 做投影。
+
+    默认实现: football_log.vision.pitch_keypoint_detector.PitchKeypointDetector
+    替换场景: TVCalib、SoccerNet Camera Calibration baseline、手标关键帧光流传播
+    """
+
+    def detect(
+        self, frame: np.ndarray
+    ) -> Tuple[Optional[np.ndarray], np.ndarray, np.ndarray]:
+        """从一帧图像估计场地单应矩阵。
+
+        Returns:
+            H        : (3,3) float32，像素坐标→世界坐标（米）单应矩阵；
+                       关键点不足或 RANSAC 失败时返回 None
+            kps_px   : (N,2) float32，检测到的关键点像素坐标
+            kp_conf  : (N,)  float32，每个关键点的置信度
+        """
+        ...
