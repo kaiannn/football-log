@@ -15,12 +15,12 @@ Install dep:
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Sequence, Tuple, TYPE_CHECKING
+from typing import List, Optional, Sequence, Tuple, TYPE_CHECKING
 
 import numpy as np
 
 if TYPE_CHECKING:
-    from football_log.protocols import Detection
+    from football_log.protocols import Detection, TeamClassifierProto
 
 try:
     from ultralytics import YOLO
@@ -100,9 +100,9 @@ class DeepSortTracker:
         self.referee_class_ids: Tuple[int, ...] = _coerce_ids(referee_class_ids)
         self.team_a_class_ids: Tuple[int, ...] = _coerce_ids(team_a_class_ids)
         self.team_b_class_ids: Tuple[int, ...] = _coerce_ids(team_b_class_ids)
-        self._team_classifier: Optional[Any] = None
+        self._team_classifier: Optional["TeamClassifierProto"] = None
 
-    def set_team_classifier(self, tc: Any) -> None:
+    def set_team_classifier(self, tc: "TeamClassifierProto") -> None:
         self._team_classifier = tc
 
     @property

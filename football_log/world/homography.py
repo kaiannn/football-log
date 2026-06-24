@@ -21,6 +21,7 @@ class Homography:
 
     def __post_init__(self) -> None:
         self.matrix = np.asarray(self.matrix, dtype=np.float64).reshape(3, 3)
+        self._inv_matrix: Optional[np.ndarray] = None
 
     def pixel_to_world(self, u: float, v: float) -> Tuple[float, float]:
         """像素 (u, v) → 世界坐标 (wx, wy)，单位米。"""
@@ -31,8 +32,9 @@ class Homography:
 
     def world_to_pixel(self, wx: float, wy: float) -> Tuple[float, float]:
         """世界 (wx, wy) → 像素 (u, v)。需要 H 可逆时可靠。"""
-        Hinv = np.linalg.inv(self.matrix)
-        p = Hinv @ np.array([wx, wy, 1.0], dtype=np.float64)
+        if self._inv_matrix is None:
+            self._inv_matrix = np.linalg.inv(self.matrix)
+        p = self._inv_matrix @ np.array([wx, wy, 1.0], dtype=np.float64)
         if abs(p[2]) < 1e-12:
             return float("nan"), float("nan")
         return float(p[0] / p[2]), float(p[1] / p[2])

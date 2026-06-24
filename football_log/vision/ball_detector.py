@@ -10,6 +10,8 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+from football_log.protocols import Detection
+
 try:
     from ultralytics import YOLO
     from inference.models.utils import get_roboflow_model  # noqa: F401 — not required
@@ -26,8 +28,7 @@ except ImportError:
 class BallDetector:
     """Runs football-ball-detection.pt with optional InferenceSlicer tiling.
 
-    Returns a list of dicts: [{bbox:(x,y,w,h), conf:float}, ...]
-    Each bbox is the highest-confidence ball found in the frame.
+    Returns a list of Detection objects (typically 0 or 1 ball per frame).
 
     slicer=True  → accurate, ~4–8 YOLO passes per frame, slower (~4 fps on M4)
     slicer=False → single pass at imgsz, faster but may miss distant balls
@@ -56,17 +57,17 @@ class BallDetector:
                 "mode. Install with: pip install supervision"
             )
 
-    def detect(self, frame: np.ndarray) -> List[dict]:
+    def detect(self, frame: np.ndarray) -> List[Detection]:
         if self.use_slicer:
             return self._detect_sliced(frame)
         return self._detect_single(frame)
 
     # ------------------------------------------------------------------
-    def _detect_single(self, frame: np.ndarray) -> List[dict]:
+    def _detect_single(self, frame: np.ndarray) -> List[Detection]:
         results = self.model(frame, imgsz=self.imgsz, conf=self.conf, verbose=False)
         return self._parse(results, frame)
 
-    def _detect_sliced(self, frame: np.ndarray) -> List[dict]:
+    def _detect_sliced(self, frame: np.ndarray) -> List[Detection]:
         import supervision as sv
 
         def _callback(crop: np.ndarray) -> sv.Detections:
@@ -83,17 +84,18 @@ class BallDetector:
         if len(detections) == 0:
             return []
 
-        # Pick the single highest-confidence detection (there's only one ball).
         best = int(detections.confidence.argmax())
         x1, y1, x2, y2 = [int(v) for v in detections.xyxy[best]]
-        return [{
-            "bbox": (x1, y1, max(0, x2 - x1), max(0, y2 - y1)),
-            "conf": float(detections.confidence[best]),
-        }]
+        return [Detection(
+            track_id=-1,
+            bbox=(x1, y1, max(0, x2 - x1), max(0, y2 - y1)),
+            label="Ball",
+            conf=float(detections.confidence[best]),
+        )]
 
     # ------------------------------------------------------------------
     @staticmethod
-    def _parse(results, frame: np.ndarray) -> List[dict]:
+    def _parse(results, frame: np.ndarray) -> List[Detection]:
         if not results:
             return []
         boxes = results[0].boxes
@@ -105,4 +107,9 @@ class BallDetector:
             return []
         best = int(confs.argmax())
         x1, y1, x2, y2 = [int(v) for v in xyxy[best]]
-        return [{"bbox": (x1, y1, max(0, x2 - x1), max(0, y2 - y1)), "conf": float(confs[best])}]
+        return [Detection(
+            track_id=-1,
+            bbox=(x1, y1, max(0, x2 - x1), max(0, y2 - y1)),
+            label="Ball",
+            conf=float(confs[best]),
+        )]

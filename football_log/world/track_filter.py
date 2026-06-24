@@ -101,27 +101,12 @@ class TrackFilter:
         )
 
     def _Q(self, dt: float) -> np.ndarray:
-        """Continuous-white-noise acceleration model."""
+        """Continuous-white-noise acceleration model, state order (x, y, vx, vy)."""
         a2 = self.accel_std ** 2
         dt2 = dt * dt
         dt3 = dt2 * dt
         dt4 = dt3 * dt
-        Qx = np.array(
-            [
-                [dt4 / 4.0, dt3 / 2.0],
-                [dt3 / 2.0, dt2],
-            ],
-            dtype=np.float64,
-        ) * a2
-        Q = np.zeros((4, 4), dtype=np.float64)
-        Q[:2, :2] = Qx                      # x components
-        Q[2:, 2:] = Qx                      # y components — wait, off
-        # Reorder so state is (x, y, vx, vy): mix accordingly.
-        # The block above gives (x, vx, y, vy) noise; we want (x, y, vx, vy).
-        # So map: (0,0)->(0,0), (0,1)->(0,2), (1,0)->(2,0), (1,1)->(2,2),
-        #         (2,2)->(1,1), (2,3)->(1,3), (3,2)->(3,1), (3,3)->(3,3).
-        # Easier path: build directly in (x, y, vx, vy) ordering:
-        Q = np.array(
+        return np.array(
             [
                 [dt4 / 4.0, 0.0,        dt3 / 2.0, 0.0      ],
                 [0.0,       dt4 / 4.0,  0.0,       dt3 / 2.0],
@@ -130,7 +115,6 @@ class TrackFilter:
             ],
             dtype=np.float64,
         ) * a2
-        return Q
 
     @staticmethod
     def _H() -> np.ndarray:

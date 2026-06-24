@@ -12,9 +12,7 @@
   BallDetectorProto      BallDetector (Roboflow ball model)  专用小目标模型、InferenceSlicer
   Exporter               TrackingDataWriter (JSONL/CSV)     数据库写入、实时推流
 
-注：BallDetector 当前实现的 detect() 返回 List[dict] 而非 List[Detection]，
-是已知的类型偏差——运行时正常，mypy 会提示。后续统一时改该实现即可，
-无需改 Protocol 定义。
+注：BallDetector.detect() 已统一返回 List[Detection]，与本 Protocol 一致。
 """
 
 from __future__ import annotations
@@ -147,9 +145,6 @@ class BallDetectorProto(Protocol):
 
     默认实现: football_log.vision.ball_detector.BallDetector
     替换场景: 不同供应商的专用球模型、InferenceSlicer 分块检测
-
-    NOTE: 当前 BallDetector.detect() 返回 List[dict]（已知类型偏差）。
-    运行时正常；后续统一数据结构时只需改实现，不改本 Protocol。
     """
 
     def detect(self, frame: np.ndarray) -> List[Detection]:

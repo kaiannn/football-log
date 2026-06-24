@@ -11,7 +11,7 @@ Pipeline 支持通过 Protocol 注入自定义组件：
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Dict, List, Optional, TYPE_CHECKING
 
 import cv2
 import numpy as np
@@ -160,14 +160,14 @@ class VideoTrackerPipeline:
         # ------ 组件初始化（注入优先，否则创建默认） ------
 
         if team_cls is not None:
-            self.team_classifier: Any = team_cls
+            self.team_classifier: "TeamClassifierProto" = team_cls
         elif team_classifier_kind == "keypoint":
             self.team_classifier = KeypointTeamClassifier(team_colors=team_colors)
         else:
             self.team_classifier = TeamClassifier(team_colors=team_colors)
 
         if detector is not None:
-            self._detector = detector
+            self._detector: "Detector" = detector
         elif team_class_model:
             # Module 3B: 6-class YOLO encodes team directly — no separate team classifier.
             # Class layout from default_team_class_map():
@@ -241,7 +241,7 @@ class VideoTrackerPipeline:
         self.pitch_field_detect = bool(pitch_field_detect)
         self.pitch_field_every_n = max(1, int(pitch_field_every_n))
         if pitch_est is not None:
-            self._pitch_estimator: Optional[Any] = pitch_est
+            self._pitch_estimator: Optional["PitchEstimator"] = pitch_est
         else:
             self._pitch_estimator = PitchFieldEstimator() if self.pitch_field_detect else None
         self._pitch_smoother: Optional[TemporalPitchSmoother] = (
@@ -283,7 +283,7 @@ class VideoTrackerPipeline:
         }
 
         if exporter is not None:
-            self.data_writer: Any = exporter
+            self.data_writer: "Exporter" = exporter
         else:
             self.data_writer = TrackingDataWriter(
                 output_dir=output_dir,
@@ -427,17 +427,8 @@ class VideoTrackerPipeline:
             if self._ball_detector is not None and should_detect:
                 ball_dets = self._ball_detector.detect(frame)
                 if ball_dets:
-                    from football_log.protocols import Detection as _Det
-                    # Remove any ball detections from main tracker for this frame.
                     detections = [d for d in detections if "Ball" not in d.label]
-                    bd = ball_dets[0]
-                    x, y, w, h = bd["bbox"]
-                    detections.append(_Det(
-                        track_id=-1,  # dedicated ball gets id -1 (no ByteTrack ID)
-                        bbox=(x, y, w, h),
-                        label="Ball",
-                        conf=bd["conf"],
-                    ))
+                    detections.append(ball_dets[0])
 
             detections = _enrich_detections(detections, self._projector)
             # If no calibrated projector, use keypoint H for world coords.
