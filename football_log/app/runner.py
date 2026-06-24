@@ -339,6 +339,13 @@ class VideoTrackerPipeline:
         self._kp_smoother = HomographySmoother(alpha=0.3)
         self._stop_requested = False
 
+        # Per-component timing accumulators (seconds).
+        self._timing: Dict[str, float] = {
+            "detect": 0.0, "pitch_field": 0.0, "keypoint": 0.0,
+            "ball_detect": 0.0, "project": 0.0, "kalman": 0.0,
+            "export": 0.0, "overlay": 0.0, "radar": 0.0,
+        }
+
         # Open VideoCapture LAST — after all model init — to avoid AVFoundation
         # dropping the file handle during PyTorch/MPS/Metal initialisation on macOS.
         self.cap = cv2.VideoCapture(self._video_source, cv2.CAP_FFMPEG)
@@ -396,6 +403,7 @@ class VideoTrackerPipeline:
         self._stop_requested = True
 
     def iter_frames(self):
+        _t = time.perf_counter
         while not self._stop_requested:
             ret, frame = self.cap.read()
             if not ret:
@@ -403,15 +411,14 @@ class VideoTrackerPipeline:
 
             should_detect = (self.frame_idx % self.detect_every_n == 0) or not self.last_tracked_detections
             if should_detect:
-                # If the team classifier needs per-frame setup (e.g. pose
-                # estimation for the keypoint classifier), let it run before
-                # detection so its results are ready when instant_label is called.
                 prepare = getattr(self.team_classifier, "update_pose_for_frame", None)
                 if prepare is not None:
                     prepare(frame, self.frame_idx)
+                _t0 = _t()
                 self.last_tracked_detections = self._detector.detect(frame)
+                self._timing["detect"] += _t() - _t0
 
-            # Auto-calibration: refresh the per-frame homography before projection.
+            # Auto-calibration
             calib_prepare = getattr(self._projector, "prepare_for_frame", None)
             if calib_prepare is not None:
                 calib_prepare(self.frame_idx, frame)
@@ -420,10 +427,12 @@ class VideoTrackerPipeline:
 
             if self.pitch_field_detect and self._pitch_estimator is not None:
                 if self.frame_idx % self.pitch_field_every_n == 0 or self._last_pitch_obs is None:
+                    _t0 = _t()
                     obs = self._pitch_estimator.estimate(frame)
                     if self._pitch_smoother is not None:
                         obs = self._pitch_smoother.smooth(obs)
                     self._last_pitch_obs = obs
+                    self._timing["pitch_field"] += _t() - _t0
                 if self.pitch_field_filter_tracks and self._last_pitch_obs is not None:
                     as_dicts = [d.to_dict() for d in detections]
                     filtered = filter_objects_in_grass_mask(as_dicts, self._last_pitch_obs.grass_mask)
@@ -439,13 +448,17 @@ class VideoTrackerPipeline:
             # and populates world coords for all detections.
             if self._pitch_kp_detector is not None:
                 if self.frame_idx % self.pitch_field_every_n == 0 or self._kp_H is None:
+                    _t0 = _t()
                     H_new, _, _ = self._pitch_kp_detector.detect(frame)
                     if H_new is not None:
                         self._kp_H = self._kp_smoother.smooth(H_new)
+                    self._timing["keypoint"] += _t() - _t0
 
-            # Dedicated ball detector: runs on detect frames, merges result.
+            # Dedicated ball detector
             if self._ball_detector is not None and should_detect:
+                _t0 = _t()
                 ball_dets = self._ball_detector.detect(frame)
+                self._timing["ball_detect"] += _t() - _t0
                 if ball_dets:
                     detections = [d for d in detections if "Ball" not in d.label]
                     detections.append(ball_dets[0])
@@ -481,6 +494,7 @@ class VideoTrackerPipeline:
                         if delta > 0:
                             det.bbox = (det.bbox[0], det.bbox[1] + delta, det.bbox[2], det.bbox[3] - delta)
 
+            _t0 = _t()
             detections = _enrich_detections(detections, self._projector)
             # If no calibrated projector, use keypoint H for world coords.
             if self._projector is None and self._kp_H is not None:
@@ -492,6 +506,9 @@ class VideoTrackerPipeline:
                     pt = cv2.perspectiveTransform(foot, self._kp_H)
                     det.world_x_m = float(pt[0, 0, 0])
                     det.world_y_m = float(pt[0, 0, 1])
+            self._timing["project"] += _t() - _t0
+
+            _t0 = _t()
             if self._track_filter is not None:
                 for det in detections:
                     jl = jump_likelihoods.get(det.track_id, 0.0)
@@ -518,18 +535,25 @@ class VideoTrackerPipeline:
                 # Periodic eviction so the filter doesn't grow unbounded.
                 if self.frame_idx % 300 == 0:
                     self._track_filter.evict_stale(self.frame_idx)
+            self._timing["kalman"] += _t() - _t0
+
+            _t0 = _t()
             self.data_writer.write_frame(self.frame_idx, detections)
+            self._timing["export"] += _t() - _t0
 
             current_dicts = [d.to_dict() for d in detections]
             display = frame.copy()
+            _t0 = _t()
             if self._save_debug_overlay and self._last_pitch_obs is not None:
                 draw_pitch_observation(display, self._last_pitch_obs)
             draw_tracking_overlay(display, current_dicts)
             draw_frame_hud(display, self.frame_idx, self.detect_every_n)
-
             if self._video_writer is not None:
                 self._video_writer.write(display)
+            self._timing["overlay"] += _t() - _t0
+
             if self._radar_renderer is not None and self._radar_writer is not None:
+                _t0 = _t()
                 if self._kp_H is not None:
                     self._radar_renderer.set_homography(self._kp_H)
                     quad = None
@@ -539,6 +563,7 @@ class VideoTrackerPipeline:
                     current_dicts, field_quad_xy=quad, frame_shape=frame.shape
                 )
                 self._radar_writer.write(radar_img)
+                self._timing["radar"] += _t() - _t0
 
             yield frame, display, current_dicts, self.frame_idx
             self.frame_idx += 1
@@ -553,3 +578,18 @@ class VideoTrackerPipeline:
         if self.show_ui:
             cv2.destroyAllWindows()
         print(f"轨迹导出完成，记录数: {self.data_writer.records_written}")
+        self._print_timing()
+
+    def _print_timing(self) -> None:
+        total = sum(self._timing.values())
+        if total <= 0 or self.frame_idx == 0:
+            return
+        print(f"\n{'─' * 50}")
+        print(f"  性能分析 ({self.frame_idx} 帧, 总耗时 {total:.1f}s, {self.frame_idx / total:.1f} FPS)")
+        print(f"{'─' * 50}")
+        for name, t in sorted(self._timing.items(), key=lambda x: -x[1]):
+            if t > 0:
+                pct = t / total * 100
+                avg_ms = t / self.frame_idx * 1000
+                print(f"  {name:<14} {t:6.1f}s  ({pct:4.1f}%)  avg {avg_ms:.1f}ms/帧")
+        print(f"{'─' * 50}\n")
