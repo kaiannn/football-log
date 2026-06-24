@@ -1,0 +1,38 @@
+name: Feature Request
+description: Suggest a new feature or improvement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题/需求
+      description: 你想解决什么问题？或想增加什么能力？
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: 建议方案
+      description: 你认为应该怎么实现？有没有参考的论文或项目？
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: 类别
+      options:
+        - 检测/跟踪
+        - 分队
+        - 世界坐标/标定
+        - 评估
+        - 性能
+        - 文档
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: 补充信息
+      description: 任何额外的上下文、截图、参考链接

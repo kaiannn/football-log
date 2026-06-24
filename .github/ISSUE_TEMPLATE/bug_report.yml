@@ -1,0 +1,65 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢你报告问题！请填写以下信息帮助我们定位问题。
+
+  - type: input
+    id: version
+    attributes:
+      label: football-log 版本
+      placeholder: "v1.0.0 或 commit SHA"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: 操作系统
+      options:
+        - macOS
+        - Linux
+        - Windows
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python 版本
+      placeholder: "3.12.0"
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 发生了什么？期望的行为是什么？
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 最小复现命令和步骤
+      placeholder: |
+        python run.py --video test.mp4 --no-ui
+    validations:
+      required: true
+
+  - type: textarea
+    id: error
+    attributes:
+      label: 错误日志
+      description: 粘贴完整的错误输出
+      render: shell
+
+  - type: textarea
+    id: video
+    attributes:
+      label: 输入视频信息
+      description: 分辨率、帧率、时长、镜头类型（转播/集锦/特写）
+      placeholder: "1920x1080, 25fps, 30s, 转播半场机位"
