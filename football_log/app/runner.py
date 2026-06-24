@@ -21,7 +21,7 @@ from football_log.pitch.field_estimator import PitchFieldEstimator, TemporalPitc
 from football_log.pitch.integration import filter_objects_in_grass_mask
 from football_log.pitch.observation import PitchObservation
 from football_log.protocols import Detection
-from football_log.ui.overlay import draw_frame_hud, draw_tracking_overlay
+from football_log.ui.overlay import draw_frame_hud, draw_pitch_observation, draw_tracking_overlay
 from football_log.ui.radar import RadarRenderer
 from football_log.vision.team_classifier import TeamClassifier
 from football_log.vision.team_classifier_keypoint import KeypointTeamClassifier
@@ -36,7 +36,7 @@ from football_log.world.auto_calibration import (
 from football_log.world.homography import Homography, HomographyProjector
 from football_log.world.pitch_model import PitchSpec
 from football_log.world.pinhole_ground import PinholeGroundProjector, load_pinhole_ground_projector
-from football_log.world.track_filter import TrackFilter
+from football_log.world.track_filter import TrackFilter, jump_likelihood_from_height_change
 
 if TYPE_CHECKING:
     from football_log.protocols import (
@@ -122,6 +122,7 @@ class VideoTrackerPipeline:
         team_class_model: Optional[str] = None,
         save_video: bool = False,
         save_radar: bool = False,
+        save_debug_overlay: bool = False,
         pitch_keypoint_model: Optional[str] = None,
         ball_model: Optional[str] = None,
         ball_slicer: bool = False,
@@ -254,6 +255,7 @@ class VideoTrackerPipeline:
         self._track_filter: Optional[TrackFilter] = (
             TrackFilter(fps=self.fps) if self.bev_smoothing else None
         )
+        self._prev_bbox_heights: Dict[int, float] = {}  # track_id → previous bbox height
 
         if self.is_camera:
             stem = f"cam_{time.strftime('%Y%m%d_%H%M%S')}"
@@ -295,6 +297,7 @@ class VideoTrackerPipeline:
         self.last_tracked_detections: List[Detection] = []
         self._save_video = save_video
         self._save_radar = save_radar
+        self._save_debug_overlay = save_debug_overlay
         self._output_dir = output_dir
         self._stem = stem
         self._video_writer: Optional[cv2.VideoWriter] = None
@@ -315,9 +318,9 @@ class VideoTrackerPipeline:
             self._ball_detector = BallDetector(ball_model, conf=conf, imgsz=imgsz, slicer=ball_slicer)
             print(f"Ball detection model → {ball_model}{' (slicer)' if ball_slicer else ''}")
 
-        # Shared H from keypoint model (smoothed via EMA).
+        # Shared H from keypoint model (smoothed via EMA, normalised H[2,2]=1).
         self._kp_H: Optional[np.ndarray] = None
-        self._kp_alpha: float = 0.3  # EMA smoothing
+        self._kp_smoother = HomographySmoother(alpha=0.3)
         self._stop_requested = False
 
         # Open VideoCapture LAST — after all model init — to avoid AVFoundation
@@ -418,10 +421,7 @@ class VideoTrackerPipeline:
                 if self.frame_idx % self.pitch_field_every_n == 0 or self._kp_H is None:
                     H_new, _, _ = self._pitch_kp_detector.detect(frame)
                     if H_new is not None:
-                        if self._kp_H is None:
-                            self._kp_H = H_new
-                        else:
-                            self._kp_H = self._kp_alpha * H_new + (1 - self._kp_alpha) * self._kp_H
+                        self._kp_H = self._kp_smoother.smooth(H_new)
 
             # Dedicated ball detector: runs on detect frames, merges result.
             if self._ball_detector is not None and should_detect:
@@ -451,13 +451,26 @@ class VideoTrackerPipeline:
                     det.world_x_m = float(pt[0, 0, 0])
                     det.world_y_m = float(pt[0, 0, 1])
             if self._track_filter is not None:
+                frame_h = frame.shape[0]
                 for det in detections:
+                    # Compute jump likelihood from bbox height change.
+                    _, _, _, bh = det.bbox
+                    prev_h = self._prev_bbox_heights.get(det.track_id)
+                    jl = jump_likelihood_from_height_change(
+                        bbox_height=float(bh),
+                        prev_height=prev_h,
+                        bbox_y_top=float(det.bbox[1]),
+                        frame_height=frame_h,
+                    )
+                    self._prev_bbox_heights[det.track_id] = float(bh)
+
                     if det.world_x_m is None or det.world_y_m is None:
                         smoothed = self._track_filter.update(
                             track_id=det.track_id,
                             world_xy=None,
                             frame_idx=self.frame_idx,
                             conf=float(det.conf),
+                            jump_likelihood=jl,
                         )
                     else:
                         smoothed = self._track_filter.update(
@@ -465,6 +478,7 @@ class VideoTrackerPipeline:
                             world_xy=(det.world_x_m, det.world_y_m),
                             frame_idx=self.frame_idx,
                             conf=float(det.conf),
+                            jump_likelihood=jl,
                         )
                     if smoothed is not None:
                         det.world_x_m_smoothed = smoothed[0]
@@ -476,6 +490,8 @@ class VideoTrackerPipeline:
 
             current_dicts = [d.to_dict() for d in detections]
             display = frame.copy()
+            if self._save_debug_overlay and self._last_pitch_obs is not None:
+                draw_pitch_observation(display, self._last_pitch_obs)
             draw_tracking_overlay(display, current_dicts)
             draw_frame_hud(display, self.frame_idx, self.detect_every_n)
 

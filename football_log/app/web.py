@@ -9,6 +9,7 @@ import cv2
 import gradio as gr
 
 from football_log.app.runner import VideoTrackerPipeline
+from football_log.vision.label_utils import parse_team_colors
 from football_log.world.pitch_model import PitchSpec
 
 
@@ -29,24 +30,6 @@ _FORMATS = ["both", "jsonl", "csv"]
 
 _active_pipeline: Optional[VideoTrackerPipeline] = None
 _pipeline_lock = threading.Lock()
-
-
-def _parse_team_colors(text: str):
-    if not text or not text.strip():
-        return None
-    parts = text.strip().split(";")
-    if len(parts) < 2:
-        return None
-    colors = []
-    for p in parts[:2]:
-        try:
-            nums = [int(x.strip()) for x in p.split(",")]
-        except ValueError:
-            return None
-        if len(nums) != 3:
-            return None
-        colors.append(tuple(nums))
-    return colors
 
 
 def _resolve_file_path(file_obj) -> Optional[str]:
@@ -95,7 +78,7 @@ def _build_pipeline(
         pitch_field_detect=pitch_field_detect,
         pitch_field_every_n=int(pitch_field_every_n),
         pitch_field_filter_tracks=pitch_field_filter,
-        team_colors=_parse_team_colors(team_colors_text),
+        team_colors=parse_team_colors(team_colors_text),
         player_class_ids=ids.get("player"),
         ball_class_ids=ids.get("ball"),
         referee_class_ids=ids.get("referee"),

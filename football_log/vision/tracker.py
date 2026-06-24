@@ -24,7 +24,7 @@ except ImportError as exc:
 else:
     _import_error = None
 
-from football_log.vision.team_classifier import TeamClassifier, get_dominant_color
+from football_log.vision.team_classifier import TeamClassifier
 from football_log.vision.tracker_registry import resolve_tracker
 
 
@@ -107,25 +107,13 @@ class YoloByteTrackTracker:
         bbox: Tuple[int, int, int, int],
         track_id: int,
     ) -> Tuple[str, Optional[Tuple[int, int, int]]]:
-        """Pure label-resolution logic; testable without ultralytics."""
-        if obj_cls in self.ball_class_ids:
-            return "Ball", None
-        if obj_cls in self.referee_class_ids:
-            return "Referee", None
-        # Module 3B: team label comes directly from the 6-class detector
-        if obj_cls in self.team_a_class_ids:
-            return "Team A", get_dominant_color(frame, bbox)
-        if obj_cls in self.team_b_class_ids:
-            return "Team B", get_dominant_color(frame, bbox)
-
-        # Default branch: treat as a player and run team classification if available.
-        tc = self._team_classifier
-        if tc is not None:
-            instant = tc.instant_label(frame, bbox)
-            label = tc.smooth_label(track_id, instant)
-        else:
-            label = "Player"
-        return label, get_dominant_color(frame, bbox)
+        from football_log.vision.label_utils import assign_label as _al
+        return _al(
+            obj_cls, frame, bbox, track_id,
+            self.ball_class_ids, self.referee_class_ids,
+            self.team_a_class_ids, self.team_b_class_ids,
+            self._team_classifier,
+        )
 
     # ------ 内部方法 ------
 

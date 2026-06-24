@@ -198,19 +198,8 @@ class KeypointTeamClassifier:
         )
 
     def smooth_label(self, track_id: int, instant_label: str) -> str:
-        if "Player" not in instant_label and "Team" not in instant_label:
-            return instant_label
-        history = self._history[track_id]
-        history.append(instant_label)
-        a_votes = sum(1 for x in history if x == self.TEAM_A)
-        b_votes = sum(1 for x in history if x == self.TEAM_B)
-        if a_votes > b_votes:
-            return self.TEAM_A
-        if b_votes > a_votes:
-            return self.TEAM_B
-        if a_votes == 0 and b_votes == 0:
-            return self.UNKNOWN
-        return instant_label
+        from football_log.vision.label_utils import smooth_label as _sl
+        return _sl(track_id, instant_label, self._history, self.TEAM_A, self.TEAM_B, self.UNKNOWN)
 
     # ------ internals ------
 

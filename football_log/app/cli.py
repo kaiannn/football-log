@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from football_log.app.runner import VideoTrackerPipeline
+from football_log.vision.label_utils import parse_team_colors
 from football_log.world.pitch_model import PitchSpec
 
 _MODULE1_WEIGHTS = "runs/module1_v1/weights/best.pt"
@@ -134,6 +135,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="将俯视雷达视频保存为 <output-dir>/<name>_radar.mp4",
     )
     p.add_argument(
+        "--save-debug-overlay",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="在输出视频上叠加场地检测调试层（草地掩膜、场线、四边形）",
+    )
+    p.add_argument(
         "--pitch-keypoint-model",
         default=None,
         help="Roboflow pitch keypoint 模型路径（32点检测，提升雷达精度和世界坐标准确性）。"
@@ -176,21 +183,6 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _parse_team_colors(raw: str):
-    if not raw:
-        return None
-    parts = raw.strip().split(";")
-    if len(parts) < 2:
-        raise SystemExit("--team-colors 需要两组 BGR，用分号分隔，如 '255,255,255;0,255,255'")
-    colors = []
-    for p in parts[:2]:
-        nums = [int(x.strip()) for x in p.split(",")]
-        if len(nums) != 3:
-            raise SystemExit(f"BGR 颜色需要 3 个整数，得到: {p}")
-        colors.append(tuple(nums))
-    return colors
-
-
 def main() -> None:
     args = build_parser().parse_args()
     if not args.video.startswith("cam") and not os.path.exists(args.video):
@@ -199,7 +191,7 @@ def main() -> None:
     pitch = PitchSpec(length_m=args.pitch_length_m, width_m=args.pitch_width_m)
     pitch.validate()
 
-    team_colors = _parse_team_colors(args.team_colors)
+    team_colors = parse_team_colors(args.team_colors)
 
     # When Module 1 weights are active and the user hasn't explicitly set class IDs,
     # apply the Module 1 class mapping automatically (player=0, ball=1, referee=2).
@@ -242,6 +234,7 @@ def main() -> None:
         team_class_model=args.team_class_model,
         save_video=args.save_video,
         save_radar=args.save_radar,
+        save_debug_overlay=args.save_debug_overlay,
         pitch_keypoint_model=args.pitch_keypoint_model,
         ball_model=args.ball_model,
         ball_slicer=args.ball_slicer,

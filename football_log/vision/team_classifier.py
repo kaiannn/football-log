@@ -15,60 +15,13 @@ from typing import Deque, Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
-_GRASS_H_LOW = 35
-_GRASS_H_HIGH = 85
-_GRASS_S_MIN = 40
+from football_log.vision.label_utils import (
+    _extract_jersey_patch,
+    _grass_mask,
+    get_dominant_color,
+)
+
 _MIN_NON_GRASS_RATIO = 0.15
-
-
-def _extract_jersey_patch(frame: np.ndarray, bbox: Tuple[int, ...]) -> Optional[np.ndarray]:
-    x, y, w, h = bbox
-    y_top = y + int(h * 0.20)
-    y_bot = y + int(h * 0.50)
-    x_left = x + int(w * 0.15)
-    x_right = x + int(w * 0.85)
-    fh, fw = frame.shape[:2]
-    y_top = max(0, y_top)
-    y_bot = min(fh, y_bot)
-    x_left = max(0, x_left)
-    x_right = min(fw, x_right)
-    if y_bot <= y_top or x_right <= x_left:
-        return None
-    patch = frame[y_top:y_bot, x_left:x_right]
-    if patch.size == 0:
-        return None
-    return patch
-
-
-def _grass_mask(patch_bgr: np.ndarray) -> np.ndarray:
-    hsv = cv2.cvtColor(patch_bgr, cv2.COLOR_BGR2HSV)
-    h = hsv[:, :, 0]
-    s = hsv[:, :, 1]
-    return (h >= _GRASS_H_LOW) & (h <= _GRASS_H_HIGH) & (s >= _GRASS_S_MIN)
-
-
-def _patch_to_hs_feature(patch_bgr: np.ndarray) -> Optional[np.ndarray]:
-    mask = ~_grass_mask(patch_bgr)
-    total = mask.size
-    non_grass = int(mask.sum())
-    if non_grass < max(10, int(total * _MIN_NON_GRASS_RATIO)):
-        return None
-    hsv = cv2.cvtColor(patch_bgr, cv2.COLOR_BGR2HSV)
-    h_vals = hsv[:, :, 0][mask].astype(np.float32) * 2.0
-    s_vals = hsv[:, :, 1][mask].astype(np.float32)
-    return np.array([float(h_vals.mean()), float(s_vals.mean())], dtype=np.float32)
-
-
-def get_dominant_color(frame: np.ndarray, bbox: Tuple[int, ...]) -> Optional[Tuple[int, int, int]]:
-    patch = _extract_jersey_patch(frame, bbox)
-    if patch is None:
-        return None
-    mask = ~_grass_mask(patch)
-    if mask.sum() < 10:
-        return None
-    pixels = patch[mask]
-    median_bgr = np.median(pixels, axis=0).astype(int)
-    return (int(median_bgr[0]), int(median_bgr[1]), int(median_bgr[2]))
 
 
 def _bgr_to_hs_center(bgr: Tuple[int, int, int]) -> np.ndarray:
@@ -158,16 +111,5 @@ class TeamClassifier:
         return self._classify(feat)
 
     def smooth_label(self, track_id: int, instant_label: str) -> str:
-        if "Player" not in instant_label and "Team" not in instant_label:
-            return instant_label
-        history = self._history[track_id]
-        history.append(instant_label)
-        a_votes = sum(1 for x in history if x == self.TEAM_A)
-        b_votes = sum(1 for x in history if x == self.TEAM_B)
-        if a_votes > b_votes:
-            return self.TEAM_A
-        if b_votes > a_votes:
-            return self.TEAM_B
-        if a_votes == 0 and b_votes == 0:
-            return self.UNKNOWN
-        return instant_label
+        from football_log.vision.label_utils import smooth_label as _sl
+        return _sl(track_id, instant_label, self._history, self.TEAM_A, self.TEAM_B, self.UNKNOWN)

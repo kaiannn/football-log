@@ -298,6 +298,11 @@ class AutoCalibrationProjector:
         self.n_frames_seen: int = 0
         self.n_frames_with_homography: int = 0
 
+    @property
+    def current_homography(self) -> Optional[Homography]:
+        """The most recent Homography object, or None if unavailable."""
+        return self._current_H
+
     def prepare_for_frame(self, frame_idx: int, frame_bgr: np.ndarray) -> None:
         self.n_frames_seen += 1
         self._source.prepare_for_frame(frame_idx, frame_bgr)

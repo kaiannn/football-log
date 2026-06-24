@@ -31,7 +31,7 @@ else:
     _yolo_import_error = None
 
 
-from football_log.vision.team_classifier import get_dominant_color
+
 
 
 def _coerce_ids(value: Optional[Sequence[int] | int]) -> Tuple[int, ...]:
@@ -178,20 +178,10 @@ class DeepSortTracker:
         bbox: Tuple[int, int, int, int],
         track_id: int,
     ) -> Tuple[str, Optional[Tuple[int, int, int]]]:
-        """Same routing logic as YoloByteTrackTracker._assign_label."""
-        if obj_cls in self.ball_class_ids:
-            return "Ball", None
-        if obj_cls in self.referee_class_ids:
-            return "Referee", None
-        if obj_cls in self.team_a_class_ids:
-            return "Team A", get_dominant_color(frame, bbox)
-        if obj_cls in self.team_b_class_ids:
-            return "Team B", get_dominant_color(frame, bbox)
-
-        tc = self._team_classifier
-        if tc is not None:
-            instant = tc.instant_label(frame, bbox)
-            label = tc.smooth_label(track_id, instant)
-        else:
-            label = "Player"
-        return label, get_dominant_color(frame, bbox)
+        from football_log.vision.label_utils import assign_label as _al
+        return _al(
+            obj_cls, frame, bbox, track_id,
+            self.ball_class_ids, self.referee_class_ids,
+            self.team_a_class_ids, self.team_b_class_ids,
+            self._team_classifier,
+        )
