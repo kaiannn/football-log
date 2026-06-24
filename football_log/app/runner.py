@@ -10,6 +10,7 @@ Pipeline 支持通过 Protocol 注入自定义组件：
 
 import os
 import time
+from collections import deque
 from pathlib import Path
 from typing import Dict, List, Optional, TYPE_CHECKING
 
@@ -256,6 +257,7 @@ class VideoTrackerPipeline:
             TrackFilter(fps=self.fps) if self.bev_smoothing else None
         )
         self._prev_bbox_heights: Dict[int, float] = {}  # track_id → previous bbox height
+        self._ground_anchors: Dict[int, deque] = {}  # track_id → recent bbox bottom y values
 
         if self.is_camera:
             stem = f"cam_{time.strftime('%Y%m%d_%H%M%S')}"
@@ -434,6 +436,37 @@ class VideoTrackerPipeline:
                     detections = [d for d in detections if "Ball" not in d.label]
                     detections.append(ball_dets[0])
 
+            # Ground-anchor correction for jumping players: when bev_smoothing
+            # detects a likely jump, adjust the bbox bottom to the track's
+            # historical ground level before projection.
+            jump_likelihoods: Dict[int, float] = {}
+            if self._track_filter is not None and self.bev_smoothing:
+                frame_h = frame.shape[0]
+                for det in detections:
+                    if "Ball" in det.label:
+                        continue
+                    _, _, _, bh = det.bbox
+                    prev_h = self._prev_bbox_heights.get(det.track_id)
+                    jl = jump_likelihood_from_height_change(
+                        bbox_height=float(bh),
+                        prev_height=prev_h,
+                        bbox_y_top=float(det.bbox[1]),
+                        frame_height=frame_h,
+                    )
+                    self._prev_bbox_heights[det.track_id] = float(bh)
+                    jump_likelihoods[det.track_id] = jl
+                    # Track ground anchor (recent bbox bottom values).
+                    anchor = self._ground_anchors.setdefault(det.track_id, deque(maxlen=30))
+                    foot_y = det.bbox[1] + det.bbox[3]
+                    if jl < 0.3:
+                        anchor.append(foot_y)
+                    # On jump, shift bbox to ground level.
+                    if jl >= 0.5 and len(anchor) >= 5:
+                        ground_y = int(np.median(list(anchor)))
+                        delta = ground_y - foot_y
+                        if delta > 0:
+                            det.bbox = (det.bbox[0], det.bbox[1] + delta, det.bbox[2], det.bbox[3] - delta)
+
             detections = _enrich_detections(detections, self._projector)
             # If no calibrated projector, use keypoint H for world coords.
             if self._projector is None and self._kp_H is not None:
@@ -446,18 +479,8 @@ class VideoTrackerPipeline:
                     det.world_x_m = float(pt[0, 0, 0])
                     det.world_y_m = float(pt[0, 0, 1])
             if self._track_filter is not None:
-                frame_h = frame.shape[0]
                 for det in detections:
-                    # Compute jump likelihood from bbox height change.
-                    _, _, _, bh = det.bbox
-                    prev_h = self._prev_bbox_heights.get(det.track_id)
-                    jl = jump_likelihood_from_height_change(
-                        bbox_height=float(bh),
-                        prev_height=prev_h,
-                        bbox_y_top=float(det.bbox[1]),
-                        frame_height=frame_h,
-                    )
-                    self._prev_bbox_heights[det.track_id] = float(bh)
+                    jl = jump_likelihoods.get(det.track_id, 0.0)
 
                     if det.world_x_m is None or det.world_y_m is None:
                         smoothed = self._track_filter.update(
