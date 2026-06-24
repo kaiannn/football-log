@@ -119,10 +119,6 @@ def test_missing_deep_sort_realtime_raises_helpful_error(monkeypatch):
     """If deep-sort-realtime is not installed, __init__ raises RuntimeError."""
     import sys
 
-    # Temporarily hide the module if installed
-    real_mod = sys.modules.pop("deep_sort_realtime.deepsort_tracker", None)
-    real_parent = sys.modules.pop("deep_sort_realtime", None)
-
     class _FakeYOLO:
         def __init__(self, _):
             pass
@@ -130,6 +126,10 @@ def test_missing_deep_sort_realtime_raises_helpful_error(monkeypatch):
     import football_log.vision.deepsort_tracker as mod
     orig_yolo = mod.YOLO
     mod.YOLO = _FakeYOLO  # type: ignore
+
+    # Block import of deep_sort_realtime even if installed
+    monkeypatch.setitem(sys.modules, "deep_sort_realtime", None)
+    monkeypatch.setitem(sys.modules, "deep_sort_realtime.deepsort_tracker", None)
 
     try:
         with pytest.raises(RuntimeError, match="deep-sort-realtime"):
@@ -139,7 +139,3 @@ def test_missing_deep_sort_realtime_raises_helpful_error(monkeypatch):
             )
     finally:
         mod.YOLO = orig_yolo
-        if real_mod is not None:
-            sys.modules["deep_sort_realtime.deepsort_tracker"] = real_mod
-        if real_parent is not None:
-            sys.modules["deep_sort_realtime"] = real_parent
