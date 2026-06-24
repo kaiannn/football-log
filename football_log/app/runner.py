@@ -366,16 +366,20 @@ class VideoTrackerPipeline:
             f"pitch field: {self.pitch_field_detect}"
         )
 
-        for frame, display, current, frame_idx in self._iter_frames():
+        for frame, display, current, frame_idx in self.iter_frames():
             if self.show_ui:
                 cv2.imshow("Video Tracker", display)
                 key = cv2.waitKey(1 if self.is_camera else self.delay) & 0xFF
                 if key == ord("q"):
                     break
 
-        self._finish()
+        self.finish()
 
-    def _iter_frames(self):
+    def request_stop(self) -> None:
+        """Request graceful stop of the processing loop."""
+        self._stop_requested = True
+
+    def iter_frames(self):
         while not self._stop_requested:
             ret, frame = self.cap.read()
             if not ret:
@@ -502,7 +506,7 @@ class VideoTrackerPipeline:
             yield frame, display, current_dicts, self.frame_idx
             self.frame_idx += 1
 
-    def _finish(self) -> None:
+    def finish(self) -> None:
         self.cap.release()
         if self._video_writer is not None:
             self._video_writer.release()

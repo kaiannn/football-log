@@ -145,7 +145,7 @@ def _run_video_streaming(
     total_frames = int(pipeline.cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
     rgb = None
 
-    for _frame, display, _current, frame_idx in pipeline._iter_frames():
+    for _frame, display, _current, frame_idx in pipeline.iter_frames():
         rgb = cv2.cvtColor(display, cv2.COLOR_BGR2RGB)
         if total_frames > 0:
             pct = int((frame_idx + 1) / total_frames * 100)
@@ -154,7 +154,7 @@ def _run_video_streaming(
             status = f"帧 {frame_idx + 1}"
         yield rgb, [], None, None, status
 
-    pipeline._finish()
+    pipeline.finish()
     with _pipeline_lock:
         _active_pipeline = None
 
@@ -189,14 +189,14 @@ def _run_camera_streaming(
     with _pipeline_lock:
         _active_pipeline = pipeline
 
-    for _frame, display, _current, frame_idx in pipeline._iter_frames():
+    for _frame, display, _current, frame_idx in pipeline.iter_frames():
         rgb = cv2.cvtColor(display, cv2.COLOR_BGR2RGB)
         elapsed = frame_idx / pipeline.fps if pipeline.fps > 0 else 0
         mins, secs = divmod(int(elapsed), 60)
         status = f"实时 | 帧 {frame_idx + 1} | {mins:02d}:{secs:02d} | {pipeline.data_writer.records_written} 条记录"
         yield rgb, [], None, None, status
 
-    pipeline._finish()
+    pipeline.finish()
     with _pipeline_lock:
         _active_pipeline = None
 
