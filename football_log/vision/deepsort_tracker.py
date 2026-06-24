@@ -21,6 +21,7 @@ import numpy as np
 
 if TYPE_CHECKING:
     from football_log.protocols import Detection, TeamClassifierProto
+    from football_log.vision.reid import ReIDExtractor
 
 try:
     from ultralytics import YOLO
@@ -63,6 +64,7 @@ class DeepSortTracker:
         referee_class_ids: Optional[Sequence[int]] = None,
         team_a_class_ids: Optional[Sequence[int]] = None,
         team_b_class_ids: Optional[Sequence[int]] = None,
+        reid_extractor: Optional["ReIDExtractor"] = None,
     ):
         if YOLO is None:
             raise RuntimeError(
@@ -80,13 +82,14 @@ class DeepSortTracker:
         self.model = YOLO(model_name)
         self._conf = conf
         self._imgsz = imgsz
+        self._reid_extractor = reid_extractor
         self._tracker = DeepSort(
             max_age=max_age,
             n_init=n_init,
-            nms_max_overlap=1.0,  # YOLO has already applied NMS
+            nms_max_overlap=1.0,
             max_cosine_distance=max_cosine_distance,
             nn_budget=None,
-            embedder=embedder,
+            embedder=embedder if reid_extractor is None else None,
             half=half,
             bgr=True,
         )
@@ -137,8 +140,19 @@ class DeepSortTracker:
                     int(clss[i]),
                 ))
 
-        # 3. DeepSORT update: Kalman predict + Re-ID association
-        tracks = self._tracker.update_tracks(raw_dets, frame=frame)
+        # 3. Compute custom Re-ID embeddings if extractor provided
+        embeds = None
+        if self._reid_extractor is not None and raw_dets:
+            embeds = []
+            for det in raw_dets:
+                ltrb = det[0]
+                x, y = int(ltrb[0]), int(ltrb[1])
+                w, h = int(ltrb[2] - ltrb[0]), int(ltrb[3] - ltrb[1])
+                emb = self._reid_extractor.extract(frame, (x, y, w, h))
+                embeds.append(emb.astype(np.float32))
+
+        # 4. DeepSORT update: Kalman predict + Re-ID association
+        tracks = self._tracker.update_tracks(raw_dets, frame=frame, embeds=embeds)
 
         # 4. Build Detection list from confirmed tracks
         detections: List[Detection] = []

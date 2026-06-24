@@ -78,19 +78,33 @@ class Detection:
 
 @runtime_checkable
 class Detector(Protocol):
-    """检测 + 跟踪：输入一帧图像，输出 Detection 列表。"""
+    """检测 + 跟踪：输入一帧图像，输出 Detection 列表。
 
-    def detect(self, frame: np.ndarray) -> List[Detection]: ...
+    语义约定：
+        - track_id: 同一目标跨帧保持相同 ID；球检测器可填 -1
+        - label: "Team A" / "Team B" / "Player" / "Ball" / "Referee"
+        - conf: 检测置信度，范围 0.0-1.0
+        - bbox: (x, y, w, h) 像素坐标，x/y 为左上角
+    """
+
+    def detect(self, frame: np.ndarray) -> List[Detection]:
+        """对一帧图像执行检测 + 跟踪，返回 Detection 列表。"""
+        ...
 
 
 @runtime_checkable
 class TeamClassifierProto(Protocol):
     """分队：给单个检测打上队伍标签（瞬时判定 + 跨帧平滑）。
 
-    默认 Detector（YoloByteTrackTracker）按以下顺序调用：
+    默认 Detector 按以下顺序调用：
         instant = tc.instant_label(frame, bbox)
         label   = tc.smooth_label(track_id, instant)
     自定义实现需同时提供这两个方法。
+
+    语义约定：
+        - instant_label 返回值: "Team A" / "Team B" / "Player"（未确定时）
+        - smooth_label 返回值: "Team A" / "Team B" / "Player"（平滑后）
+        - 非队伍标签（"Ball" / "Referee"）应原样透传
     """
 
     def instant_label(self, frame: np.ndarray, bbox: Tuple[int, ...]) -> str:
@@ -104,7 +118,12 @@ class TeamClassifierProto(Protocol):
 
 @runtime_checkable
 class PitchEstimator(Protocol):
-    """场地估计：从一帧图像输出场地观测。"""
+    """场地估计：从一帧图像输出场地观测。
+
+    语义约定：
+        - 返回值应兼容 PitchObservation（含 grass_mask, field_quad_xy, confidence 等字段）
+        - 无法估计时返回一个 confidence=0 的空观测
+    """
 
     def estimate(self, frame: np.ndarray) -> Any:
         """返回 PitchObservation 或兼容结构。"""
@@ -113,27 +132,49 @@ class PitchEstimator(Protocol):
 
 @runtime_checkable
 class WorldProjector(Protocol):
-    """坐标映射：像素坐标 → 世界坐标（米）。"""
+    """坐标映射：像素坐标 → 世界坐标（米）。
+
+    可选方法：
+        prepare_for_frame(frame_idx, frame_bgr) — 每帧投影前调用，
+        用于需要逐帧更新内部状态的投影器（如 AutoCalibrationProjector）。
+        不需要此钩子的实现可以不定义此方法。
+    """
 
     def project(
         self,
         bbox: Tuple[int, int, int, int],
         label: str,
     ) -> Tuple[Optional[float], Optional[float]]:
-        """返回 (world_x_m, world_y_m)，无法映射时返回 (None, None)。"""
+        """返回 (world_x_m, world_y_m)，无法映射时返回 (None, None)。
+
+        label 约定: "Team A" / "Team B" / "Player" / "Ball" / "Referee"
+        bbox 约定: (x, y, w, h) 像素坐标
+        """
         ...
 
 
 @runtime_checkable
 class Exporter(Protocol):
-    """导出：将每帧 Detection 列表持久化。"""
+    """导出：将每帧 Detection 列表持久化。
 
-    def write_frame(self, frame_idx: int, detections: List[Detection]) -> None: ...
+    语义约定：
+        - write_frame 在每帧结束时调用，detections 已包含世界坐标（如有）
+        - close 在管线结束时调用，用于 flush/close 文件句柄
+        - records_written 返回已写入的记录总数
+    """
 
-    def close(self) -> None: ...
+    def write_frame(self, frame_idx: int, detections: List[Detection]) -> None:
+        """将一帧的检测结果写入持久化存储。"""
+        ...
+
+    def close(self) -> None:
+        """关闭导出器，释放资源。"""
+        ...
 
     @property
-    def records_written(self) -> int: ...
+    def records_written(self) -> int:
+        """已写入的记录总数。"""
+        ...
 
 
 @runtime_checkable

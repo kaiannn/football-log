@@ -287,7 +287,7 @@ class VideoTrackerPipeline:
             "auto_calibration_keyframes": cfg.auto_calibration_keyframes,
             "homography_sequence_path": cfg.homography_sequence_path,
             "world_coords_enabled": world_on,
-            "auto_calibration_enabled": isinstance(self._projector, AutoCalibrationProjector),
+            "auto_calibration_enabled": hasattr(self._projector, "prepare_for_frame"),
             "pitch_field_detect": self.pitch_field_detect,
             "pitch_field_every_n": self.pitch_field_every_n,
             "pitch_field_filter_tracks": self.pitch_field_filter_tracks,
