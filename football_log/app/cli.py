@@ -93,12 +93,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--pitch-length-m", type=float, default=105.0, help="球场长度（米），写入 meta")
     p.add_argument("--pitch-width-m", type=float, default=68.0, help="球场宽度（米），写入 meta")
 
-    # ----- Pitch field estimation (default ON for spectator filtering) -----
+    # ----- Pitch field estimation (opt-in; keypoint model is preferred) -----
     p.add_argument(
         "--pitch-field-detect",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="启用草地+场线+四边形估计（默认开启）；用 --no-pitch-field-detect 关闭",
+        default=False,
+        help="启用草地+场线+四边形估计（默认关闭，推荐使用 --pitch-keypoint-model）；"
+        "用 --pitch-field-detect 开启",
     )
     p.add_argument(
         "--pitch-field-every-n",
@@ -109,9 +110,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--pitch-field-filter-tracks",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="用草地掩膜过滤观众席误检（默认开启，依赖 --pitch-field-detect）；"
-        "用 --no-pitch-field-filter-tracks 关闭",
+        default=False,
+        help="用草地掩膜过滤观众席误检（默认关闭，依赖 --pitch-field-detect）；"
+        "用 --pitch-field-filter-tracks 开启",
     )
 
     p.add_argument(
