@@ -1,0 +1,34 @@
+[project]
+name = "football-log"
+version = "1.0.0"
+description = "Football match video analysis — video in, structured trajectory data out."
+requires-python = ">=3.10"
+license = {text = "MIT"}
+readme = "README.md"
+dependencies = [
+    "opencv-python>=4.8,<5",
+    "numpy>=1.24,<3",
+    "ultralytics>=8.1,<9",
+    "pyyaml>=6",
+    "gradio>=4,<5",
+    "matplotlib>=3.7",
+]
+
+[project.optional-dependencies]
+deepsort = ["deep-sort-realtime>=1.3"]
+slicer = ["supervision"]
+dev = [
+    "pytest>=7,<9",
+    "motmetrics>=1.4",
+]
+
+[project.scripts]
+football-log = "football_log.app.cli:main"
+football-log-web = "football_log.app.web:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["football_log*"]
