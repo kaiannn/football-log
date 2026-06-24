@@ -6,11 +6,20 @@ Pipeline 支持通过 Protocol 注入自定义组件：
 - projector:  protocols.WorldProjector (默认 HomographyProjector / PinholeGroundProjector)
 - pitch_est:  protocols.PitchEstimator (默认 PitchFieldEstimator)
 - exporter:   protocols.Exporter       (默认 TrackingDataWriter)
+
+使用方式：
+    config = PipelineConfig(video_path="match.mp4", save_video=True)
+    pipeline = VideoTrackerPipeline(config)
+    pipeline.run()
+
+    # 或注入自定义组件：
+    pipeline = VideoTrackerPipeline(config, detector=MyDetector())
 """
 
 import os
 import time
 from collections import deque
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, TYPE_CHECKING
 
@@ -79,54 +88,62 @@ def _enrich_detections(
     return detections
 
 
+@dataclass
+class PipelineConfig:
+    """流水线配置 — 所有非插件参数。
+
+    传递给 VideoTrackerPipeline(config) 即可运行。
+    """
+
+    video_path: str
+    output_dir: str = "outputs"
+    output_format: str = "both"
+    model_name: str = "yolov8n.pt"
+    conf: float = 0.3
+    imgsz: int = 640
+    detect_every_n: int = 1
+    show_ui: bool = True
+    tracker: str = "bytetrack.yaml"
+    homography_path: Optional[str] = None
+    camera_calib_path: Optional[str] = None
+    auto_calibration_keyframes: Optional[str] = None
+    homography_sequence_path: Optional[str] = None
+    homography_smoothing_alpha: float = 0.3
+    pitch: Optional[PitchSpec] = None
+    pitch_field_detect: bool = False
+    pitch_field_every_n: int = 15
+    pitch_field_temporal_smooth: bool = True
+    pitch_field_filter_tracks: bool = False
+    team_colors: Optional[List[tuple]] = None
+    team_classifier_kind: str = "hsv"
+    player_class_ids: Optional[List[int]] = None
+    ball_class_ids: Optional[List[int]] = None
+    referee_class_ids: Optional[List[int]] = None
+    bev_smoothing: bool = False
+    team_class_model: Optional[str] = None
+    save_video: bool = False
+    save_radar: bool = False
+    save_debug_overlay: bool = False
+    pitch_keypoint_model: Optional[str] = None
+    ball_model: Optional[str] = None
+    ball_slicer: bool = False
+
+
 class VideoTrackerPipeline:
     """核心流水线。
 
-    使用方式一（默认，向后兼容）：
-        pipeline = VideoTrackerPipeline(video_path="match.mp4")
+    使用方式一（推荐）：
+        config = PipelineConfig(video_path="match.mp4", save_video=True)
+        pipeline = VideoTrackerPipeline(config)
 
     使用方式二（注入自定义组件）：
-        pipeline = VideoTrackerPipeline(
-            video_path="match.mp4",
-            detector=MyCustomDetector(),
-            projector=MyCustomProjector(),
-        )
+        config = PipelineConfig(video_path="match.mp4")
+        pipeline = VideoTrackerPipeline(config, detector=MyCustomDetector())
     """
 
     def __init__(
         self,
-        video_path: str,
-        output_dir: str = "outputs",
-        output_format: str = "both",
-        model_name: str = "yolov8n.pt",
-        conf: float = 0.3,
-        imgsz: int = 640,
-        detect_every_n: int = 1,
-        show_ui: bool = True,
-        tracker: str = "bytetrack.yaml",
-        homography_path: Optional[str] = None,
-        camera_calib_path: Optional[str] = None,
-        auto_calibration_keyframes: Optional[str] = None,
-        homography_sequence_path: Optional[str] = None,
-        homography_smoothing_alpha: float = 0.3,
-        pitch: Optional[PitchSpec] = None,
-        pitch_field_detect: bool = False,
-        pitch_field_every_n: int = 15,
-        pitch_field_temporal_smooth: bool = True,
-        pitch_field_filter_tracks: bool = False,
-        team_colors: Optional[List[tuple]] = None,
-        team_classifier_kind: str = "hsv",
-        player_class_ids: Optional[List[int]] = None,
-        ball_class_ids: Optional[List[int]] = None,
-        referee_class_ids: Optional[List[int]] = None,
-        bev_smoothing: bool = False,
-        team_class_model: Optional[str] = None,
-        save_video: bool = False,
-        save_radar: bool = False,
-        save_debug_overlay: bool = False,
-        pitch_keypoint_model: Optional[str] = None,
-        ball_model: Optional[str] = None,
-        ball_slicer: bool = False,
+        config: PipelineConfig,
         # ------ 插件注入点 ------
         detector: Optional["Detector"] = None,
         team_cls: Optional["TeamClassifierProto"] = None,
@@ -134,8 +151,9 @@ class VideoTrackerPipeline:
         pitch_est: Optional["PitchEstimator"] = None,
         exporter: Optional["Exporter"] = None,
     ):
-        self.video_path = video_path
-        source, self.is_camera = _parse_video_source(video_path)
+        cfg = config
+        self.video_path = cfg.video_path
+        source, self.is_camera = _parse_video_source(cfg.video_path)
         # Defer VideoCapture open until after all model loading — on macOS/AVFoundation
         # the file handle can be dropped while PyTorch/Metal initialises CUDA/MPS.
         self._video_source = source
@@ -144,7 +162,7 @@ class VideoTrackerPipeline:
         _probe = cv2.VideoCapture(source)
         if not _probe.isOpened():
             kind = "摄像头" if self.is_camera else "视频文件"
-            raise SystemExit(f"无法打开{kind}: {video_path}")
+            raise SystemExit(f"无法打开{kind}: {cfg.video_path}")
         if self.is_camera:
             self.fps = _probe.get(cv2.CAP_PROP_FPS)
             if not self.fps or self.fps <= 0:
@@ -153,8 +171,8 @@ class VideoTrackerPipeline:
             self.fps = _probe.get(cv2.CAP_PROP_FPS) or 25
         _probe.release()
         self.delay = int(1000 / self.fps)
-        self.show_ui = show_ui
-        self.detect_every_n = max(1, detect_every_n)
+        self.show_ui = cfg.show_ui
+        self.detect_every_n = max(1, cfg.detect_every_n)
         self.frame_idx = 0
         self._stop_requested = False
 
@@ -162,23 +180,19 @@ class VideoTrackerPipeline:
 
         if team_cls is not None:
             self.team_classifier: "TeamClassifierProto" = team_cls
-        elif team_classifier_kind == "keypoint":
-            self.team_classifier = KeypointTeamClassifier(team_colors=team_colors)
+        elif cfg.team_classifier_kind == "keypoint":
+            self.team_classifier = KeypointTeamClassifier(team_colors=cfg.team_colors)
         else:
-            self.team_classifier = TeamClassifier(team_colors=team_colors)
+            self.team_classifier = TeamClassifier(team_colors=cfg.team_colors)
 
         if detector is not None:
             self._detector: "Detector" = detector
-        elif team_class_model:
-            # Module 3B: 6-class YOLO encodes team directly — no separate team classifier.
-            # Class layout from default_team_class_map():
-            #   0=team_a_player  1=team_b_player  2=goalkeeper_a  3=goalkeeper_b
-            #   4=referee  5=ball
+        elif cfg.team_class_model:
             yolo = YoloByteTrackTracker(
-                model_name=team_class_model,
-                conf=conf,
-                imgsz=imgsz,
-                tracker=tracker,
+                model_name=cfg.team_class_model,
+                conf=cfg.conf,
+                imgsz=cfg.imgsz,
+                tracker=cfg.tracker,
                 player_class_ids=(),
                 ball_class_ids=(5,),
                 referee_class_ids=(4,),
@@ -186,27 +200,27 @@ class VideoTrackerPipeline:
                 team_b_class_ids=(1, 3),
             )
             self._detector = yolo
-        elif tracker.strip().lower() == "deepsort":
+        elif cfg.tracker.strip().lower() == "deepsort":
             from football_log.vision.deepsort_tracker import DeepSortTracker
             ds = DeepSortTracker(
-                model_name=model_name,
-                conf=conf,
-                imgsz=imgsz,
-                player_class_ids=tuple(player_class_ids) if player_class_ids else (0,),
-                ball_class_ids=tuple(ball_class_ids) if ball_class_ids else (32,),
-                referee_class_ids=tuple(referee_class_ids) if referee_class_ids else None,
+                model_name=cfg.model_name,
+                conf=cfg.conf,
+                imgsz=cfg.imgsz,
+                player_class_ids=tuple(cfg.player_class_ids) if cfg.player_class_ids else (0,),
+                ball_class_ids=tuple(cfg.ball_class_ids) if cfg.ball_class_ids else (32,),
+                referee_class_ids=tuple(cfg.referee_class_ids) if cfg.referee_class_ids else None,
             )
             ds.set_team_classifier(self.team_classifier)
             self._detector = ds
         else:
             yolo = YoloByteTrackTracker(
-                model_name=model_name,
-                conf=conf,
-                imgsz=imgsz,
-                tracker=tracker,
-                player_class_ids=tuple(player_class_ids) if player_class_ids else (0,),
-                ball_class_ids=tuple(ball_class_ids) if ball_class_ids else (32,),
-                referee_class_ids=tuple(referee_class_ids) if referee_class_ids else None,
+                model_name=cfg.model_name,
+                conf=cfg.conf,
+                imgsz=cfg.imgsz,
+                tracker=cfg.tracker,
+                player_class_ids=tuple(cfg.player_class_ids) if cfg.player_class_ids else (0,),
+                ball_class_ids=tuple(cfg.ball_class_ids) if cfg.ball_class_ids else (32,),
+                referee_class_ids=tuple(cfg.referee_class_ids) if cfg.referee_class_ids else None,
             )
             yolo.set_team_classifier(self.team_classifier)
             self._detector = yolo
@@ -215,18 +229,18 @@ class VideoTrackerPipeline:
             self._projector: Optional["WorldProjector"] = projector
         else:
             _pinhole: Optional[PinholeGroundProjector] = None
-            if camera_calib_path:
-                _pinhole = load_pinhole_ground_projector(camera_calib_path)
-            _H = _load_homography(homography_path)
+            if cfg.camera_calib_path:
+                _pinhole = load_pinhole_ground_projector(cfg.camera_calib_path)
+            _H = _load_homography(cfg.homography_path)
             _auto: Optional[AutoCalibrationProjector] = None
-            if auto_calibration_keyframes:
-                kfs = load_keyframes_json(Path(auto_calibration_keyframes))
+            if cfg.auto_calibration_keyframes:
+                kfs = load_keyframes_json(Path(cfg.auto_calibration_keyframes))
                 _source = KeyframeOpticalFlowSource(kfs)
-                _smoother = HomographySmoother(alpha=homography_smoothing_alpha)
+                _smoother = HomographySmoother(alpha=cfg.homography_smoothing_alpha)
                 _auto = AutoCalibrationProjector(_source, _smoother)
-            elif homography_sequence_path:
-                _source = HomographySequenceSource(Path(homography_sequence_path))
-                _smoother = HomographySmoother(alpha=homography_smoothing_alpha)
+            elif cfg.homography_sequence_path:
+                _source = HomographySequenceSource(Path(cfg.homography_sequence_path))
+                _smoother = HomographySmoother(alpha=cfg.homography_smoothing_alpha)
                 _auto = AutoCalibrationProjector(_source, _smoother)
 
             if _auto is not None:
@@ -237,27 +251,27 @@ class VideoTrackerPipeline:
                 self._projector = HomographyProjector(_H)
             else:
                 self._projector = None
-        self.pitch = pitch or PitchSpec()
+        self.pitch = cfg.pitch or PitchSpec()
 
-        self.pitch_field_detect = bool(pitch_field_detect)
-        self.pitch_field_every_n = max(1, int(pitch_field_every_n))
+        self.pitch_field_detect = bool(cfg.pitch_field_detect)
+        self.pitch_field_every_n = max(1, int(cfg.pitch_field_every_n))
         if pitch_est is not None:
             self._pitch_estimator: Optional["PitchEstimator"] = pitch_est
         else:
             self._pitch_estimator = PitchFieldEstimator() if self.pitch_field_detect else None
         self._pitch_smoother: Optional[TemporalPitchSmoother] = (
-            TemporalPitchSmoother() if (self.pitch_field_detect and pitch_field_temporal_smooth) else None
+            TemporalPitchSmoother() if (self.pitch_field_detect and cfg.pitch_field_temporal_smooth) else None
         )
         self._last_pitch_obs: Optional[PitchObservation] = None
-        self.pitch_field_filter_tracks = bool(pitch_field_filter_tracks)
+        self.pitch_field_filter_tracks = bool(cfg.pitch_field_filter_tracks)
 
         # BEV Kalman smoothing — only useful if a projector is set.
-        self.bev_smoothing = bool(bev_smoothing) and self._projector is not None
+        self.bev_smoothing = bool(cfg.bev_smoothing) and self._projector is not None
         self._track_filter: Optional[TrackFilter] = (
             TrackFilter(fps=self.fps) if self.bev_smoothing else None
         )
-        self._prev_bbox_heights: Dict[int, float] = {}  # track_id → previous bbox height
-        self._ground_anchors: Dict[int, deque] = {}  # track_id → recent bbox bottom y values
+        self._prev_bbox_heights: Dict[int, float] = {}
+        self._ground_anchors: Dict[int, deque] = {}
 
         if self.is_camera:
             stem = f"cam_{time.strftime('%Y%m%d_%H%M%S')}"
@@ -268,19 +282,19 @@ class VideoTrackerPipeline:
         extra_meta = {
             "pitch_length_m": self.pitch.length_m,
             "pitch_width_m": self.pitch.width_m,
-            "homography_path": homography_path,
-            "camera_calib_path": camera_calib_path,
-            "auto_calibration_keyframes": auto_calibration_keyframes,
-            "homography_sequence_path": homography_sequence_path,
+            "homography_path": cfg.homography_path,
+            "camera_calib_path": cfg.camera_calib_path,
+            "auto_calibration_keyframes": cfg.auto_calibration_keyframes,
+            "homography_sequence_path": cfg.homography_sequence_path,
             "world_coords_enabled": world_on,
             "auto_calibration_enabled": isinstance(self._projector, AutoCalibrationProjector),
             "pitch_field_detect": self.pitch_field_detect,
             "pitch_field_every_n": self.pitch_field_every_n,
             "pitch_field_filter_tracks": self.pitch_field_filter_tracks,
-            "player_class_ids": list(player_class_ids) if player_class_ids else [0],
-            "ball_class_ids": list(ball_class_ids) if ball_class_ids else [32],
-            "referee_class_ids": list(referee_class_ids) if referee_class_ids else [],
-            "team_classifier_kind": team_classifier_kind if team_cls is None else "custom",
+            "player_class_ids": list(cfg.player_class_ids) if cfg.player_class_ids else [0],
+            "ball_class_ids": list(cfg.ball_class_ids) if cfg.ball_class_ids else [32],
+            "referee_class_ids": list(cfg.referee_class_ids) if cfg.referee_class_ids else [],
+            "team_classifier_kind": cfg.team_classifier_kind if team_cls is None else "custom",
             "bev_smoothing_enabled": self.bev_smoothing,
         }
 
@@ -288,37 +302,37 @@ class VideoTrackerPipeline:
             self.data_writer: "Exporter" = exporter
         else:
             self.data_writer = TrackingDataWriter(
-                output_dir=output_dir,
+                output_dir=cfg.output_dir,
                 output_prefix=f"{stem}_tracks",
-                output_format=output_format,
+                output_format=cfg.output_format,
                 fps=self.fps,
                 video_path=self.video_path,
                 extra_meta=extra_meta,
             )
 
         self.last_tracked_detections: List[Detection] = []
-        self._save_video = save_video
-        self._save_radar = save_radar
-        self._save_debug_overlay = save_debug_overlay
-        self._output_dir = output_dir
+        self._save_video = cfg.save_video
+        self._save_radar = cfg.save_radar
+        self._save_debug_overlay = cfg.save_debug_overlay
+        self._output_dir = cfg.output_dir
         self._stem = stem
         self._video_writer: Optional[cv2.VideoWriter] = None
         self._radar_renderer: Optional[RadarRenderer] = None
         self._radar_writer: Optional[cv2.VideoWriter] = None
 
-        # Pitch keypoint detector — replaces grass-mask quad for homography when set.
+        # Pitch keypoint detector
         self._pitch_kp_detector = None
-        if pitch_keypoint_model:
+        if cfg.pitch_keypoint_model:
             from football_log.vision.pitch_keypoint_detector import PitchKeypointDetector
-            self._pitch_kp_detector = PitchKeypointDetector(pitch_keypoint_model, imgsz=imgsz)
-            print(f"Pitch keypoint model → {pitch_keypoint_model}")
+            self._pitch_kp_detector = PitchKeypointDetector(cfg.pitch_keypoint_model, imgsz=cfg.imgsz)
+            print(f"Pitch keypoint model → {cfg.pitch_keypoint_model}")
 
-        # Dedicated ball detector — overrides main tracker's ball detections when set.
+        # Dedicated ball detector
         self._ball_detector = None
-        if ball_model:
+        if cfg.ball_model:
             from football_log.vision.ball_detector import BallDetector
-            self._ball_detector = BallDetector(ball_model, conf=conf, imgsz=imgsz, slicer=ball_slicer)
-            print(f"Ball detection model → {ball_model}{' (slicer)' if ball_slicer else ''}")
+            self._ball_detector = BallDetector(cfg.ball_model, conf=cfg.conf, imgsz=cfg.imgsz, slicer=cfg.ball_slicer)
+            print(f"Ball detection model → {cfg.ball_model}{' (slicer)' if cfg.ball_slicer else ''}")
 
         # Shared H from keypoint model (smoothed via EMA, normalised H[2,2]=1).
         self._kp_H: Optional[np.ndarray] = None

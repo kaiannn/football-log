@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import List, Optional
 
-from football_log.app.runner import VideoTrackerPipeline
+from football_log.app.runner import PipelineConfig, VideoTrackerPipeline
 from football_log.vision.label_utils import parse_team_colors
 from football_log.world.pitch_model import PitchSpec
 
@@ -208,37 +208,39 @@ def main() -> None:
     )
 
     pipeline = VideoTrackerPipeline(
-        video_path=args.video,
-        output_dir=args.output_dir,
-        output_format=args.output_format,
-        model_name=args.model,
-        conf=args.conf,
-        imgsz=args.imgsz,
-        detect_every_n=args.detect_every_n,
-        show_ui=not args.no_ui,
-        tracker=args.tracker,
-        homography_path=args.homography,
-        camera_calib_path=args.camera_calib,
-        auto_calibration_keyframes=args.auto_calibration_keyframes,
-        homography_sequence_path=args.homography_sequence,
-        homography_smoothing_alpha=args.homography_smoothing_alpha,
-        pitch=pitch,
-        pitch_field_detect=args.pitch_field_detect,
-        pitch_field_every_n=args.pitch_field_every_n,
-        pitch_field_filter_tracks=args.pitch_field_filter_tracks,
-        team_colors=team_colors,
-        team_classifier_kind=args.team_classifier,
-        player_class_ids=player_ids,
-        ball_class_ids=ball_ids,
-        referee_class_ids=referee_ids,
-        bev_smoothing=args.bev_smoothing,
-        team_class_model=args.team_class_model,
-        save_video=args.save_video,
-        save_radar=args.save_radar,
-        save_debug_overlay=args.save_debug_overlay,
-        pitch_keypoint_model=args.pitch_keypoint_model,
-        ball_model=args.ball_model,
-        ball_slicer=args.ball_slicer,
+        PipelineConfig(
+            video_path=args.video,
+            output_dir=args.output_dir,
+            output_format=args.output_format,
+            model_name=args.model,
+            conf=args.conf,
+            imgsz=args.imgsz,
+            detect_every_n=args.detect_every_n,
+            show_ui=not args.no_ui,
+            tracker=args.tracker,
+            homography_path=args.homography,
+            camera_calib_path=args.camera_calib,
+            auto_calibration_keyframes=args.auto_calibration_keyframes,
+            homography_sequence_path=args.homography_sequence,
+            homography_smoothing_alpha=args.homography_smoothing_alpha,
+            pitch=pitch,
+            pitch_field_detect=args.pitch_field_detect,
+            pitch_field_every_n=args.pitch_field_every_n,
+            pitch_field_filter_tracks=args.pitch_field_filter_tracks,
+            team_colors=team_colors,
+            team_classifier_kind=args.team_classifier,
+            player_class_ids=player_ids,
+            ball_class_ids=ball_ids,
+            referee_class_ids=referee_ids,
+            bev_smoothing=args.bev_smoothing,
+            team_class_model=args.team_class_model,
+            save_video=args.save_video,
+            save_radar=args.save_radar,
+            save_debug_overlay=args.save_debug_overlay,
+            pitch_keypoint_model=args.pitch_keypoint_model,
+            ball_model=args.ball_model,
+            ball_slicer=args.ball_slicer,
+        )
     )
     pipeline.run()
 

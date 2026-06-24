@@ -8,7 +8,7 @@ from typing import Optional
 import cv2
 import gradio as gr
 
-from football_log.app.runner import VideoTrackerPipeline
+from football_log.app.runner import PipelineConfig, VideoTrackerPipeline
 from football_log.vision.label_utils import parse_team_colors
 from football_log.world.pitch_model import PitchSpec
 
@@ -63,30 +63,32 @@ def _build_pipeline(
     output_dir = tempfile.mkdtemp(prefix="football_log_")
     ids = _MODULE1_CLASS_IDS if model == _MODULE1_WEIGHTS else {}
     return VideoTrackerPipeline(
-        video_path=video_source,
-        output_dir=output_dir,
-        output_format=output_format,
-        model_name=model,
-        conf=conf,
-        imgsz=int(imgsz),
-        detect_every_n=int(detect_every_n),
-        show_ui=False,
-        tracker=tracker,
-        homography_path=_resolve_file_path(homography_file),
-        camera_calib_path=_resolve_file_path(camera_calib_file),
-        pitch=pitch,
-        pitch_field_detect=pitch_field_detect,
-        pitch_field_every_n=int(pitch_field_every_n),
-        pitch_field_filter_tracks=pitch_field_filter,
-        team_colors=parse_team_colors(team_colors_text),
-        player_class_ids=ids.get("player"),
-        ball_class_ids=ids.get("ball"),
-        referee_class_ids=ids.get("referee"),
-        pitch_keypoint_model=pitch_keypoint_model or None,
-        ball_model=ball_model or None,
-        ball_slicer=ball_slicer,
-        save_video=True,
-        save_radar=True,
+        PipelineConfig(
+            video_path=video_source,
+            output_dir=output_dir,
+            output_format=output_format,
+            model_name=model,
+            conf=conf,
+            imgsz=int(imgsz),
+            detect_every_n=int(detect_every_n),
+            show_ui=False,
+            tracker=tracker,
+            homography_path=_resolve_file_path(homography_file),
+            camera_calib_path=_resolve_file_path(camera_calib_file),
+            pitch=pitch,
+            pitch_field_detect=pitch_field_detect,
+            pitch_field_every_n=int(pitch_field_every_n),
+            pitch_field_filter_tracks=pitch_field_filter,
+            team_colors=parse_team_colors(team_colors_text),
+            player_class_ids=ids.get("player"),
+            ball_class_ids=ids.get("ball"),
+            referee_class_ids=ids.get("referee"),
+            pitch_keypoint_model=pitch_keypoint_model or None,
+            ball_model=ball_model or None,
+            ball_slicer=ball_slicer,
+            save_video=True,
+            save_radar=True,
+        )
     )
 
 
