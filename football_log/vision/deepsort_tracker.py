@@ -34,12 +34,7 @@ else:
 
 
 
-def _coerce_ids(value: Optional[Sequence[int] | int]) -> Tuple[int, ...]:
-    if value is None:
-        return ()
-    if isinstance(value, int):
-        return (value,)
-    return tuple(int(v) for v in value)
+from football_log.vision.label_utils import all_class_ids_from, bbox_too_small, coerce_ids
 
 
 class DeepSortTracker:
@@ -95,25 +90,23 @@ class DeepSortTracker:
             half=half,
             bgr=True,
         )
-        self.player_class_ids: Tuple[int, ...] = _coerce_ids(player_class_ids)
-        self.ball_class_ids: Tuple[int, ...] = _coerce_ids(ball_class_ids)
-        self.referee_class_ids: Tuple[int, ...] = _coerce_ids(referee_class_ids)
-        self.team_a_class_ids: Tuple[int, ...] = _coerce_ids(team_a_class_ids)
-        self.team_b_class_ids: Tuple[int, ...] = _coerce_ids(team_b_class_ids)
+        self.player_class_ids: Tuple[int, ...] = coerce_ids(player_class_ids)
+        self.ball_class_ids: Tuple[int, ...] = coerce_ids(ball_class_ids)
+        self.referee_class_ids: Tuple[int, ...] = coerce_ids(referee_class_ids)
+        self.team_a_class_ids: Tuple[int, ...] = coerce_ids(team_a_class_ids)
+        self.team_b_class_ids: Tuple[int, ...] = coerce_ids(team_b_class_ids)
         self._team_classifier: Optional["TeamClassifierProto"] = None
+        self._all_class_ids: List[int] = all_class_ids_from(
+            self.player_class_ids, self.ball_class_ids,
+            self.referee_class_ids, self.team_a_class_ids, self.team_b_class_ids,
+        )
 
     def set_team_classifier(self, tc: "TeamClassifierProto") -> None:
         self._team_classifier = tc
 
     @property
     def all_class_ids(self) -> List[int]:
-        return list(
-            self.player_class_ids
-            + self.ball_class_ids
-            + self.referee_class_ids
-            + self.team_a_class_ids
-            + self.team_b_class_ids
-        )
+        return self._all_class_ids
 
     # ------ Detector Protocol ------
 
@@ -156,9 +149,9 @@ class DeepSortTracker:
             x1, y1, x2, y2 = int(ltrb[0]), int(ltrb[1]), int(ltrb[2]), int(ltrb[3])
             w = max(0, x2 - x1)
             h = max(0, y2 - y1)
-            if w < 2 or h < 2:
-                continue
             bbox = (x1, y1, w, h)
+            if bbox_too_small(bbox):
+                continue
             cls = int(track.get_det_cls() or 0)
             conf_val = track.get_det_conf()
             label, color = self._assign_label(cls, frame, bbox, track.track_id)

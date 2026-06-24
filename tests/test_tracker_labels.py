@@ -43,6 +43,10 @@ def _make_tracker(
     t.team_a_class_ids = ()
     t.team_b_class_ids = ()
     t._team_classifier = tc
+    t._all_class_ids = sorted(set(
+        t.player_class_ids + t.ball_class_ids + t.referee_class_ids
+        + t.team_a_class_ids + t.team_b_class_ids
+    ))
     return t
 
 

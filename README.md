@@ -4,7 +4,7 @@
 
 **视频进，数据出 —— 把足球比赛视频变成可分析的结构化轨迹**
 
-[![Python](https://img.shields.io/badge/Python-3.9+-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Version](https://img.shields.io/badge/version-1.0.0-2EA44F?style=flat-square)](https://github.com/kai/football-log)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 [![Ultralytics](https://img.shields.io/badge/YOLO-Ultralytics-111F68?style=flat-square&logo=yolo&logoColor=white)](https://ultralytics.com)

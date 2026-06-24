@@ -4,5 +4,6 @@ ultralytics>=8.1,<9
 pyyaml>=6
 gradio>=4,<5
 matplotlib>=3.7
-# Optional: required only for --tracker deepsort (Module 2 standalone DeepSORT)
-deep-sort-realtime>=1.3
+# Optional deps installed via: pip install ".[deepsort]" or ".[slicer]"
+# deep-sort-realtime>=1.3  # --tracker deepsort
+# supervision              # --ball-slicer

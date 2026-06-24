@@ -24,6 +24,18 @@ from football_log.vision.label_utils import (
 _MIN_NON_GRASS_RATIO = 0.15
 
 
+def _patch_to_hs_feature(patch_bgr: np.ndarray) -> Optional[np.ndarray]:
+    mask = ~_grass_mask(patch_bgr)
+    total = mask.size
+    non_grass = int(mask.sum())
+    if non_grass < max(10, int(total * _MIN_NON_GRASS_RATIO)):
+        return None
+    hsv = cv2.cvtColor(patch_bgr, cv2.COLOR_BGR2HSV)
+    h_vals = hsv[:, :, 0][mask].astype(np.float32) * 2.0
+    s_vals = hsv[:, :, 1][mask].astype(np.float32)
+    return np.array([float(h_vals.mean()), float(s_vals.mean())], dtype=np.float32)
+
+
 def _bgr_to_hs_center(bgr: Tuple[int, int, int]) -> np.ndarray:
     pixel = np.array([[list(bgr)]], dtype=np.uint8)
     hsv = cv2.cvtColor(pixel, cv2.COLOR_BGR2HSV)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
@@ -143,3 +143,32 @@ def parse_team_colors(raw: Optional[str]) -> Optional[List[Tuple[int, int, int]]
             return None
         colors.append(tuple(nums))
     return colors
+
+
+# ---------------------------------------------------------------------------
+# coerce_ids / all_class_ids / bbox_too_small — shared tracker helpers
+# ---------------------------------------------------------------------------
+
+def coerce_ids(value: Optional[Iterable[int] | int]) -> Tuple[int, ...]:
+    """Normalize optional int/iterable to a tuple of ints."""
+    if value is None:
+        return ()
+    if isinstance(value, int):
+        return (value,)
+    return tuple(int(v) for v in value)
+
+
+def all_class_ids_from(
+    player: Tuple[int, ...],
+    ball: Tuple[int, ...],
+    referee: Tuple[int, ...],
+    team_a: Tuple[int, ...],
+    team_b: Tuple[int, ...],
+) -> List[int]:
+    """Concatenate all class ID tuples into a single sorted-deduped list."""
+    return sorted(set(player + ball + referee + team_a + team_b))
+
+
+def bbox_too_small(bbox: Tuple[int, int, int, int], min_side: int = 2) -> bool:
+    """Return True if bbox width or height is below min_side pixels."""
+    return bbox[2] < min_side or bbox[3] < min_side

@@ -14,9 +14,8 @@ from football_log.protocols import Detection
 
 try:
     from ultralytics import YOLO
-    from inference.models.utils import get_roboflow_model  # noqa: F401 — not required
 except ImportError:
-    pass
+    YOLO = None  # type: ignore
 
 try:
     import supervision as sv
@@ -41,12 +40,11 @@ class BallDetector:
         imgsz: int = 640,
         slicer: bool = False,
     ):
-        try:
-            from ultralytics import YOLO as _YOLO
-        except ImportError:
-            raise RuntimeError("ultralytics not installed")
-
-        self.model = _YOLO(model_path)
+        if YOLO is None:
+            raise RuntimeError(
+                "ultralytics not installed. Run: pip install ultralytics"
+            )
+        self.model = YOLO(model_path)
         self.conf = conf
         self.imgsz = imgsz
         self.use_slicer = slicer and _SV_AVAILABLE
@@ -55,6 +53,21 @@ class BallDetector:
             print(
                 "[BallDetector] supervision not installed — falling back to single-pass "
                 "mode. Install with: pip install supervision"
+            )
+
+        self._slicer = None
+        if self.use_slicer:
+            import supervision as _sv
+
+            def _callback(crop: np.ndarray) -> _sv.Detections:
+                results = self.model(crop, imgsz=self.imgsz, conf=self.conf, verbose=False)
+                return _sv.Detections.from_ultralytics(results[0])
+
+            self._slicer = _sv.InferenceSlicer(
+                callback=_callback,
+                slice_wh=(640, 640),
+                overlap_ratio_wh=(0.2, 0.2),
+                iou_threshold=0.5,
             )
 
     def detect(self, frame: np.ndarray) -> List[Detection]:
@@ -68,19 +81,8 @@ class BallDetector:
         return self._parse(results, frame)
 
     def _detect_sliced(self, frame: np.ndarray) -> List[Detection]:
-        import supervision as sv
-
-        def _callback(crop: np.ndarray) -> sv.Detections:
-            results = self.model(crop, imgsz=self.imgsz, conf=self.conf, verbose=False)
-            return sv.Detections.from_ultralytics(results[0])
-
-        slicer = sv.InferenceSlicer(
-            callback=_callback,
-            slice_wh=(640, 640),
-            overlap_ratio_wh=(0.2, 0.2),
-            iou_threshold=0.5,
-        )
-        detections = slicer(frame)
+        assert self._slicer is not None
+        detections = self._slicer(frame)
         if len(detections) == 0:
             return []
 

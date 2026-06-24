@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from typing import Iterable, List, Optional, Sequence, Tuple, TYPE_CHECKING
+from typing import List, Optional, Sequence, Tuple, TYPE_CHECKING
 
 import numpy as np
 
@@ -24,16 +24,9 @@ except ImportError as exc:
 else:
     _import_error = None
 
+from football_log.vision.label_utils import all_class_ids_from, bbox_too_small, coerce_ids
 from football_log.vision.team_classifier import TeamClassifier
 from football_log.vision.tracker_registry import resolve_tracker
-
-
-def _coerce_ids(value: Optional[Iterable[int] | int]) -> Tuple[int, ...]:
-    if value is None:
-        return ()
-    if isinstance(value, int):
-        return (value,)
-    return tuple(int(v) for v in value)
 
 
 class YoloByteTrackTracker:
@@ -60,25 +53,23 @@ class YoloByteTrackTracker:
         self.conf = conf
         self.imgsz = imgsz
         self.tracker = resolve_tracker(tracker)
-        self.player_class_ids: Tuple[int, ...] = _coerce_ids(player_class_ids)
-        self.ball_class_ids: Tuple[int, ...] = _coerce_ids(ball_class_ids)
-        self.referee_class_ids: Tuple[int, ...] = _coerce_ids(referee_class_ids)
-        self.team_a_class_ids: Tuple[int, ...] = _coerce_ids(team_a_class_ids)
-        self.team_b_class_ids: Tuple[int, ...] = _coerce_ids(team_b_class_ids)
+        self.player_class_ids: Tuple[int, ...] = coerce_ids(player_class_ids)
+        self.ball_class_ids: Tuple[int, ...] = coerce_ids(ball_class_ids)
+        self.referee_class_ids: Tuple[int, ...] = coerce_ids(referee_class_ids)
+        self.team_a_class_ids: Tuple[int, ...] = coerce_ids(team_a_class_ids)
+        self.team_b_class_ids: Tuple[int, ...] = coerce_ids(team_b_class_ids)
         self._team_classifier: Optional["TeamClassifierProto"] = None
+        self._all_class_ids: List[int] = all_class_ids_from(
+            self.player_class_ids, self.ball_class_ids,
+            self.referee_class_ids, self.team_a_class_ids, self.team_b_class_ids,
+        )
 
     def set_team_classifier(self, tc: "TeamClassifierProto") -> None:
         self._team_classifier = tc
 
     @property
     def all_class_ids(self) -> List[int]:
-        return list(
-            self.player_class_ids
-            + self.ball_class_ids
-            + self.referee_class_ids
-            + self.team_a_class_ids
-            + self.team_b_class_ids
-        )
+        return self._all_class_ids
 
     # ------ Detector Protocol ------
 
@@ -143,11 +134,12 @@ class YoloByteTrackTracker:
             x1, y1, x2, y2 = xyxy[i]
             w = max(0, x2 - x1)
             h = max(0, y2 - y1)
-            if w < 2 or h < 2:
+            bbox = (x1, y1, w, h)
+            if bbox_too_small(bbox):
                 continue
             items.append({
                 "id": int(id_arr[i]) if i < len(id_arr) else -1,
-                "bbox": (x1, y1, w, h),
+                "bbox": bbox,
                 "cls": int(cls_arr[i]),
                 "conf": float(conf_arr[i]),
             })

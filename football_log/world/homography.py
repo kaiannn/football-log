@@ -33,7 +33,10 @@ class Homography:
     def world_to_pixel(self, wx: float, wy: float) -> Tuple[float, float]:
         """世界 (wx, wy) → 像素 (u, v)。需要 H 可逆时可靠。"""
         if self._inv_matrix is None:
-            self._inv_matrix = np.linalg.inv(self.matrix)
+            try:
+                self._inv_matrix = np.linalg.inv(self.matrix)
+            except np.linalg.LinAlgError:
+                self._inv_matrix = np.linalg.pinv(self.matrix)
         p = self._inv_matrix @ np.array([wx, wy, 1.0], dtype=np.float64)
         if abs(p[2]) < 1e-12:
             return float("nan"), float("nan")
