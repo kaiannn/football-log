@@ -1,4 +1,4 @@
-def evaluate_team_classifier(model, data_loader, device, metrics, warmup_frames=50, stable_frames=50):
+def evaluate_team_classifier(model, data_loader, device, epoch, warmup=False, stable=False):
     model.eval()
     total = 0
     correct = 0
@@ -10,9 +10,9 @@ def evaluate_team_classifier(model, data_loader, device, metrics, warmup_frames=
             _, predicted = torch.max(outputs, 1)
             total += 1
             correct += (predicted == labels).sum().item()
-            if warmup_frames > 0 and total > warmup_frames:
-                break
-        # ... 中间逻辑 ...
-
+            if warmup and epoch < 50:
+                continue
+            if stable and epoch >= 50:
+                continue
     accuracy = correct / total
     return accuracy
