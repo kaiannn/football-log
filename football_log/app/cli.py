@@ -2,16 +2,19 @@
 
 import argparse
 import os
-from pathlib import Path
 from typing import List, Optional
 
 from football_log.app.runner import PipelineConfig, VideoTrackerPipeline
+from football_log.config import (
+    DEFAULT_BALL_MODEL,
+    DEFAULT_MODEL,
+    DEFAULT_PITCH_KP_MODEL,
+    DEFAULT_TRACKER,
+    MODULE1_CLASS_IDS,
+    MODULE1_WEIGHTS,
+)
 from football_log.vision.label_utils import parse_team_colors
 from football_log.world.pitch_model import PitchSpec
-
-_MODULE1_WEIGHTS = "runs/module1_v1/weights/best.pt"
-_DEFAULT_MODEL = _MODULE1_WEIGHTS if Path(_MODULE1_WEIGHTS).is_file() else "yolov8n.pt"
-_MODULE1_CLASS_IDS = {"player": "0", "ball": "1", "referee": "2"}
 
 
 def _parse_int_list(raw: Optional[str]) -> Optional[List[int]]:
@@ -25,11 +28,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--video", required=True, help="输入视频路径，或 'cam' / 'cam:0' 使用摄像头")
     p.add_argument("--output-dir", default="outputs", help="输出目录，默认 outputs")
     p.add_argument("--output-format", default="both", choices=["jsonl", "csv", "both"], help="输出格式")
-    p.add_argument("--model", default=_DEFAULT_MODEL, help="YOLO 模型权重")
+    p.add_argument("--model", default=DEFAULT_MODEL, help="YOLO 模型权重")
     p.add_argument(
         "--tracker",
-        default="bytetrack",
-        help="跟踪器：bytetrack（默认，最快）/ botsort（更稳的镜头补偿）/ "
+        default=DEFAULT_TRACKER,
+        help="跟踪器：bytetrack（最快）/ botsort（默认，更稳的镜头补偿）/ "
         "botsort+reid（BotSORT + Re-ID，遮挡场景下 ID 更稳，比 ByteTrack 慢约 2x）/ "
         "deepsort（独立 DeepSORT：YOLO 只做检测，外部 Kalman + Re-ID 做关联，"
         "遮挡恢复最好，需 pip install deep-sort-realtime）。"
@@ -95,24 +98,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ----- Pitch field estimation (opt-in; keypoint model is preferred) -----
     p.add_argument(
-        "--pitch-field-detect",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="启用草地+场线+四边形估计（默认关闭，推荐使用 --pitch-keypoint-model）；"
-        "用 --pitch-field-detect 开启",
-    )
-    p.add_argument(
-        "--pitch-field-every-n",
+        "--keypoint-every-n",
         type=int,
         default=15,
-        help="每 N 帧更新一次场地估计（其余帧复用上一结果），默认 15",
-    )
-    p.add_argument(
-        "--pitch-field-filter-tracks",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="用草地掩膜过滤观众席误检（默认关闭，依赖 --pitch-field-detect）；"
-        "用 --pitch-field-filter-tracks 开启",
+        help="每 N 帧运行一次球场关键点检测（其余帧复用上一结果），默认 15",
     )
 
     p.add_argument(
@@ -136,22 +125,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="将俯视雷达视频保存为 <output-dir>/<name>_radar.mp4",
     )
     p.add_argument(
-        "--save-debug-overlay",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="在输出视频上叠加场地检测调试层（草地掩膜、场线、四边形）",
-    )
-    p.add_argument(
         "--pitch-keypoint-model",
-        default=None,
+        default=DEFAULT_PITCH_KP_MODEL,
         help="Roboflow pitch keypoint 模型路径（32点检测，提升雷达精度和世界坐标准确性）。"
-        "示例：runs/roboflow/football-pitch-detection.pt",
+        "默认自动检测 runs/roboflow/football-pitch-detection.pt。"
+        "设为 '' 可禁用。",
     )
     p.add_argument(
         "--ball-model",
-        default=None,
+        default=DEFAULT_BALL_MODEL,
         help="专用球检测模型路径（替代主跟踪器的球检测，提升小目标召回率）。"
-        "示例：runs/roboflow/football-ball-detection.pt",
+        "默认自动检测 runs/roboflow/football-ball-detection.pt。"
+        "设为 '' 可禁用。",
     )
     p.add_argument(
         "--ball-slicer",
@@ -196,15 +181,15 @@ def main() -> None:
 
     # When Module 1 weights are active and the user hasn't explicitly set class IDs,
     # apply the Module 1 class mapping automatically (player=0, ball=1, referee=2).
-    using_module1 = args.model == _MODULE1_WEIGHTS
+    using_module1 = args.model == MODULE1_WEIGHTS
     player_ids = _parse_int_list(args.player_class_id) or (
-        _parse_int_list(_MODULE1_CLASS_IDS["player"]) if using_module1 else None
+        MODULE1_CLASS_IDS["player"] if using_module1 else None
     )
     ball_ids = _parse_int_list(args.ball_class_id) or (
-        _parse_int_list(_MODULE1_CLASS_IDS["ball"]) if using_module1 else None
+        MODULE1_CLASS_IDS["ball"] if using_module1 else None
     )
     referee_ids = _parse_int_list(args.referee_class_id) or (
-        _parse_int_list(_MODULE1_CLASS_IDS["referee"]) if using_module1 else None
+        MODULE1_CLASS_IDS["referee"] if using_module1 else None
     )
 
     pipeline = VideoTrackerPipeline(
@@ -224,9 +209,7 @@ def main() -> None:
             homography_sequence_path=args.homography_sequence,
             homography_smoothing_alpha=args.homography_smoothing_alpha,
             pitch=pitch,
-            pitch_field_detect=args.pitch_field_detect,
-            pitch_field_every_n=args.pitch_field_every_n,
-            pitch_field_filter_tracks=args.pitch_field_filter_tracks,
+            keypoint_every_n=args.keypoint_every_n,
             team_colors=team_colors,
             team_classifier_kind=args.team_classifier,
             player_class_ids=player_ids,
@@ -236,7 +219,6 @@ def main() -> None:
             team_class_model=args.team_class_model,
             save_video=args.save_video,
             save_radar=args.save_radar,
-            save_debug_overlay=args.save_debug_overlay,
             pitch_keypoint_model=args.pitch_keypoint_model,
             ball_model=args.ball_model,
             ball_slicer=args.ball_slicer,

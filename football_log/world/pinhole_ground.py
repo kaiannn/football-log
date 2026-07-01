@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional, Tuple
 import cv2
 import numpy as np
 
-from football_log.world.homography import bbox_foot_point, is_person_label
+from football_log.vision.label_utils import bbox_anchor, is_person_label
 
 
 def _load_dict(path: str) -> Dict[str, Any]:
@@ -106,11 +106,7 @@ class PinholeGroundProjector:
         """与 homography.project_foot_to_world 相同约定：球员用底边中点，球用中心。"""
         if not is_person_label(label) and label != "Ball":
             return None, None
-        if is_person_label(label):
-            u, v = bbox_foot_point(bbox)
-        else:
-            u = float(bbox[0] + 0.5 * bbox[2])
-            v = float(bbox[1] + 0.5 * bbox[3])
+        u, v = bbox_anchor(bbox, label)
         return self.pixel_to_world_xy_m(u, v)
 
     def project(
@@ -123,6 +119,8 @@ class PinholeGroundProjector:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> PinholeGroundProjector:
+        if "K" not in data:
+            raise ValueError("PinholeGroundProjector.from_dict: missing 'K' (intrinsic matrix)")
         K = np.asarray(data["K"], dtype=np.float64)
         dist = np.asarray(data.get("dist", data.get("distortion", [])), dtype=np.float64)
         if dist.size == 0:
@@ -139,7 +137,7 @@ class PinholeGroundProjector:
             C = np.asarray(ext["C"], dtype=np.float64).reshape(3)
             t = (-R @ C).reshape(3)
         else:
-            raise ValueError("extrinsics 需要 R+t（OpenCV 世界→相机）或 R+C（相机光心世界坐标）")
+            raise ValueError("extrinsics must contain R+t (OpenCV world→camera) or R+C (camera center world coords)")
 
         gp = data.get("ground_plane", {})
         if isinstance(gp, dict):

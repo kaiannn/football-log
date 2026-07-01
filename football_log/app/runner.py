@@ -4,7 +4,7 @@ Pipeline 支持通过 Protocol 注入自定义组件：
 - detector:   protocols.Detector      (默认 YoloByteTrackTracker)
 - team_cls:   protocols.TeamClassifierProto (默认 TeamClassifier)
 - projector:  protocols.WorldProjector (默认 HomographyProjector / PinholeGroundProjector)
-- pitch_est:  protocols.PitchEstimator (默认 PitchFieldEstimator)
+- pitch_est:  protocols.PitchEstimator (无默认实现，需自行注入)
 - exporter:   protocols.Exporter       (默认 TrackingDataWriter)
 
 使用方式：
@@ -16,6 +16,7 @@ Pipeline 支持通过 Protocol 注入自定义组件：
     pipeline = VideoTrackerPipeline(config, detector=MyDetector())
 """
 
+import logging
 import os
 import time
 from collections import deque
@@ -26,12 +27,13 @@ from typing import Dict, List, Optional, TYPE_CHECKING
 import cv2
 import numpy as np
 
+logger = logging.getLogger(__name__)
+
+from football_log.config import DEFAULT_BALL_MODEL, DEFAULT_PITCH_KP_MODEL, DEFAULT_TRACKER
 from football_log.io.export import TrackingDataWriter
-from football_log.pitch.field_estimator import PitchFieldEstimator, TemporalPitchSmoother
-from football_log.pitch.integration import filter_objects_in_grass_mask
 from football_log.pitch.observation import PitchObservation
 from football_log.protocols import Detection
-from football_log.ui.overlay import draw_frame_hud, draw_pitch_observation, draw_tracking_overlay
+from football_log.ui.overlay import draw_frame_hud, draw_tracking_overlay
 from football_log.ui.radar import RadarRenderer
 from football_log.vision.team_classifier import TeamClassifier
 from football_log.vision.team_classifier_keypoint import KeypointTeamClassifier
@@ -103,17 +105,14 @@ class PipelineConfig:
     imgsz: int = 640
     detect_every_n: int = 1
     show_ui: bool = True
-    tracker: str = "bytetrack.yaml"
+    tracker: str = DEFAULT_TRACKER
     homography_path: Optional[str] = None
     camera_calib_path: Optional[str] = None
     auto_calibration_keyframes: Optional[str] = None
     homography_sequence_path: Optional[str] = None
     homography_smoothing_alpha: float = 0.3
     pitch: Optional[PitchSpec] = None
-    pitch_field_detect: bool = False
-    pitch_field_every_n: int = 15
-    pitch_field_temporal_smooth: bool = True
-    pitch_field_filter_tracks: bool = False
+    keypoint_every_n: int = 15
     team_colors: Optional[List[tuple]] = None
     team_classifier_kind: str = "hsv"
     player_class_ids: Optional[List[int]] = None
@@ -123,9 +122,8 @@ class PipelineConfig:
     team_class_model: Optional[str] = None
     save_video: bool = False
     save_radar: bool = False
-    save_debug_overlay: bool = False
-    pitch_keypoint_model: Optional[str] = None
-    ball_model: Optional[str] = None
+    pitch_keypoint_model: Optional[str] = DEFAULT_PITCH_KP_MODEL
+    ball_model: Optional[str] = DEFAULT_BALL_MODEL
     ball_slicer: bool = False
 
 
@@ -253,17 +251,9 @@ class VideoTrackerPipeline:
                 self._projector = None
         self.pitch = cfg.pitch or PitchSpec()
 
-        self.pitch_field_detect = bool(cfg.pitch_field_detect)
-        self.pitch_field_every_n = max(1, int(cfg.pitch_field_every_n))
-        if pitch_est is not None:
-            self._pitch_estimator: Optional["PitchEstimator"] = pitch_est
-        else:
-            self._pitch_estimator = PitchFieldEstimator() if self.pitch_field_detect else None
-        self._pitch_smoother: Optional[TemporalPitchSmoother] = (
-            TemporalPitchSmoother() if (self.pitch_field_detect and cfg.pitch_field_temporal_smooth) else None
-        )
+        self._pitch_estimator: Optional["PitchEstimator"] = pitch_est
         self._last_pitch_obs: Optional[PitchObservation] = None
-        self.pitch_field_filter_tracks = bool(cfg.pitch_field_filter_tracks)
+        self._keypoint_every_n = max(1, int(cfg.keypoint_every_n))
 
         # BEV Kalman smoothing — only useful if a projector is set.
         self.bev_smoothing = bool(cfg.bev_smoothing) and self._projector is not None
@@ -288,9 +278,6 @@ class VideoTrackerPipeline:
             "homography_sequence_path": cfg.homography_sequence_path,
             "world_coords_enabled": world_on,
             "auto_calibration_enabled": hasattr(self._projector, "prepare_for_frame"),
-            "pitch_field_detect": self.pitch_field_detect,
-            "pitch_field_every_n": self.pitch_field_every_n,
-            "pitch_field_filter_tracks": self.pitch_field_filter_tracks,
             "player_class_ids": list(cfg.player_class_ids) if cfg.player_class_ids else [0],
             "ball_class_ids": list(cfg.ball_class_ids) if cfg.ball_class_ids else [32],
             "referee_class_ids": list(cfg.referee_class_ids) if cfg.referee_class_ids else [],
@@ -313,7 +300,6 @@ class VideoTrackerPipeline:
         self.last_tracked_detections: List[Detection] = []
         self._save_video = cfg.save_video
         self._save_radar = cfg.save_radar
-        self._save_debug_overlay = cfg.save_debug_overlay
         self._output_dir = cfg.output_dir
         self._stem = stem
         self._video_writer: Optional[cv2.VideoWriter] = None
@@ -325,14 +311,14 @@ class VideoTrackerPipeline:
         if cfg.pitch_keypoint_model:
             from football_log.vision.pitch_keypoint_detector import PitchKeypointDetector
             self._pitch_kp_detector = PitchKeypointDetector(cfg.pitch_keypoint_model, imgsz=cfg.imgsz)
-            print(f"Pitch keypoint model → {cfg.pitch_keypoint_model}")
+            logger.info("Pitch keypoint model → %s", cfg.pitch_keypoint_model)
 
         # Dedicated ball detector
         self._ball_detector = None
         if cfg.ball_model:
             from football_log.vision.ball_detector import BallDetector
             self._ball_detector = BallDetector(cfg.ball_model, conf=cfg.conf, imgsz=cfg.imgsz, slicer=cfg.ball_slicer)
-            print(f"Ball detection model → {cfg.ball_model}{' (slicer)' if cfg.ball_slicer else ''}")
+            logger.info("Ball detection model → %s%s", cfg.ball_model, " (slicer)" if cfg.ball_slicer else "")
 
         # Shared H from keypoint model (smoothed via EMA, normalised H[2,2]=1).
         self._kp_H: Optional[np.ndarray] = None
@@ -341,7 +327,7 @@ class VideoTrackerPipeline:
 
         # Per-component timing accumulators (seconds).
         self._timing: Dict[str, float] = {
-            "detect": 0.0, "pitch_field": 0.0, "keypoint": 0.0,
+            "detect": 0.0, "keypoint": 0.0,
             "ball_detect": 0.0, "project": 0.0, "kalman": 0.0,
             "export": 0.0, "overlay": 0.0, "radar": 0.0,
         }
@@ -361,7 +347,7 @@ class VideoTrackerPipeline:
             self._video_writer = cv2.VideoWriter(
                 out_path, cv2.VideoWriter_fourcc(*"mp4v"), self.fps, (w, h)
             )
-            print(f"Recording overlay video → {out_path}")
+            logger.info("Recording overlay video → %s", out_path)
 
         if self._save_radar:
             from football_log.ui.radar import _CANVAS_W, _CANVAS_H
@@ -373,7 +359,7 @@ class VideoTrackerPipeline:
             self._radar_writer = cv2.VideoWriter(
                 radar_path, cv2.VideoWriter_fourcc(*"mp4v"), self.fps, (_CANVAS_W, _CANVAS_H)
             )
-            print(f"Recording radar video → {radar_path}")
+            logger.info("Recording radar video → %s", radar_path)
 
     def run(self) -> None:
         det = self._detector
@@ -382,11 +368,11 @@ class VideoTrackerPipeline:
             m = det.model
             model_info = str(getattr(m, "ckpt_path", None) or getattr(m, "model_name", "yolo"))
         mode = "camera" if self.is_camera else "file"
-        print(f"Track pipeline ({mode}): model={model_info}, detect_every_n={self.detect_every_n}")
-        print(
-            f"Output dir: {getattr(self.data_writer, 'output_dir', '?')}, "
-            f"world coords: {self._projector is not None}, "
-            f"pitch field: {self.pitch_field_detect}"
+        logger.info("Track pipeline (%s): model=%s, detect_every_n=%d", mode, model_info, self.detect_every_n)
+        logger.info(
+            "Output dir: %s, world coords: %s",
+            getattr(self.data_writer, 'output_dir', '?'),
+            self._projector is not None,
         )
 
         for frame, display, current, frame_idx in self.iter_frames():
@@ -425,29 +411,9 @@ class VideoTrackerPipeline:
 
             detections = list(self.last_tracked_detections)
 
-            if self.pitch_field_detect and self._pitch_estimator is not None:
-                if self.frame_idx % self.pitch_field_every_n == 0 or self._last_pitch_obs is None:
-                    _t0 = _t()
-                    obs = self._pitch_estimator.estimate(frame)
-                    if self._pitch_smoother is not None:
-                        obs = self._pitch_smoother.smooth(obs)
-                    self._last_pitch_obs = obs
-                    self._timing["pitch_field"] += _t() - _t0
-                if self.pitch_field_filter_tracks and self._last_pitch_obs is not None:
-                    as_dicts = [d.to_dict() for d in detections]
-                    filtered = filter_objects_in_grass_mask(as_dicts, self._last_pitch_obs.grass_mask)
-                    # Safety: if the filter would drop every detection (likely a bad
-                    # grass-mask frame: replay graphics, weird lighting), fall back
-                    # to the unfiltered list rather than throwing the frame away.
-                    if filtered or not detections:
-                        filtered_ids = {o["id"] for o in filtered}
-                        detections = [d for d in detections if d.track_id in filtered_ids]
-
-            # Pitch keypoint model: runs at pitch_field_every_n cadence.
-            # Produces a homography that overrides the grass-mask quad in the radar
-            # and populates world coords for all detections.
+            # Pitch keypoint model: produces a homography for world coords and radar.
             if self._pitch_kp_detector is not None:
-                if self.frame_idx % self.pitch_field_every_n == 0 or self._kp_H is None:
+                if self.frame_idx % self._keypoint_every_n == 0 or self._kp_H is None:
                     _t0 = _t()
                     H_new, _, _ = self._pitch_kp_detector.detect(frame)
                     if H_new is not None:
@@ -544,8 +510,6 @@ class VideoTrackerPipeline:
             current_dicts = [d.to_dict() for d in detections]
             display = frame.copy()
             _t0 = _t()
-            if self._save_debug_overlay and self._last_pitch_obs is not None:
-                draw_pitch_observation(display, self._last_pitch_obs)
             draw_tracking_overlay(display, current_dicts)
             draw_frame_hud(display, self.frame_idx, self.detect_every_n)
             if self._video_writer is not None:
@@ -556,11 +520,8 @@ class VideoTrackerPipeline:
                 _t0 = _t()
                 if self._kp_H is not None:
                     self._radar_renderer.set_homography(self._kp_H)
-                    quad = None
-                else:
-                    quad = self._last_pitch_obs.field_quad_xy if self._last_pitch_obs is not None else None
                 radar_img = self._radar_renderer.render(
-                    current_dicts, field_quad_xy=quad, frame_shape=frame.shape
+                    current_dicts, frame_shape=frame.shape
                 )
                 self._radar_writer.write(radar_img)
                 self._timing["radar"] += _t() - _t0
@@ -577,19 +538,20 @@ class VideoTrackerPipeline:
         self.data_writer.close()
         if self.show_ui:
             cv2.destroyAllWindows()
-        print(f"轨迹导出完成，记录数: {self.data_writer.records_written}")
-        self._print_timing()
+        logger.info("轨迹导出完成，记录数: %d", self.data_writer.records_written)
+        self._log_timing()
 
-    def _print_timing(self) -> None:
+    def _log_timing(self) -> None:
         total = sum(self._timing.values())
         if total <= 0 or self.frame_idx == 0:
             return
-        print(f"\n{'─' * 50}")
-        print(f"  性能分析 ({self.frame_idx} 帧, 总耗时 {total:.1f}s, {self.frame_idx / total:.1f} FPS)")
-        print(f"{'─' * 50}")
+        lines = [f"\n{'─' * 50}"]
+        lines.append(f"  性能分析 ({self.frame_idx} 帧, 总耗时 {total:.1f}s, {self.frame_idx / total:.1f} FPS)")
+        lines.append(f"{'─' * 50}")
         for name, t in sorted(self._timing.items(), key=lambda x: -x[1]):
             if t > 0:
                 pct = t / total * 100
                 avg_ms = t / self.frame_idx * 1000
-                print(f"  {name:<14} {t:6.1f}s  ({pct:4.1f}%)  avg {avg_ms:.1f}ms/帧")
-        print(f"{'─' * 50}\n")
+                lines.append(f"  {name:<14} {t:6.1f}s  ({pct:4.1f}%)  avg {avg_ms:.1f}ms/帧")
+        lines.append(f"{'─' * 50}")
+        logger.info("\n".join(lines))

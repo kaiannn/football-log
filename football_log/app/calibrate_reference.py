@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 from typing import List, Sequence, Tuple
 
 import cv2
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 from football_log.world.heuristic_reference_fit import (
     MultiScaleFitResult,
@@ -119,7 +122,7 @@ def _collect_refs_interactive(
             ok, frame = cap.read()
             if not ok:
                 raise SystemExit(f"读取第 {fi} 帧失败")
-            print(f"[calib] frame={fi}: 请点击4个角点后按 Enter")
+            logger.info("frame=%d: 请点击4个角点后按 Enter", fi)
             pts = _select_points(frame)
             refs.append(ReferenceRectangle(image_points_xy=pts, width_m=width_m, length_m=length_m))
     finally:
@@ -152,11 +155,11 @@ def main() -> None:
     H_new = apply_scales_to_homography(Hobj.matrix, fit.scale_x, fit.scale_y)
     np.save(args.out_homography, H_new)
 
-    print("Reference fit done.")
-    print(f"n_refs={fit.n_refs}")
-    print(f"scale_x={fit.scale_x:.6f}, scale_y={fit.scale_y:.6f}")
-    print(f"rmse_m={fit.rmse_m:.4f}, robust_loss={args.robust_loss}, robust_delta_m={args.robust_delta_m}")
-    print(f"Saved: {args.out_homography}")
+    logger.info("Reference fit done.")
+    logger.info("n_refs=%d", fit.n_refs)
+    logger.info("scale_x=%.6f, scale_y=%.6f", fit.scale_x, fit.scale_y)
+    logger.info("rmse_m=%.4f, robust_loss=%s, robust_delta_m=%.4f", fit.rmse_m, args.robust_loss, args.robust_delta_m)
+    logger.info("Saved: %s", args.out_homography)
 
 
 if __name__ == "__main__":

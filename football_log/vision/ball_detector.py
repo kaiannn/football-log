@@ -6,16 +6,22 @@ Only returns ball detections — meant to be merged with the main tracker's outp
 
 from __future__ import annotations
 
+import logging
 from typing import List, Optional, Tuple
 
 import numpy as np
 
 from football_log.protocols import Detection
 
+logger = logging.getLogger(__name__)
+
 try:
     from ultralytics import YOLO
-except ImportError:
+except ImportError as exc:
     YOLO = None  # type: ignore
+    _yolo_import_error: Optional[Exception] = exc
+else:
+    _yolo_import_error = None
 
 try:
     import supervision as sv
@@ -43,16 +49,16 @@ class BallDetector:
         if YOLO is None:
             raise RuntimeError(
                 "ultralytics not installed. Run: pip install ultralytics"
-            )
+            ) from _yolo_import_error
         self.model = YOLO(model_path)
         self.conf = conf
         self.imgsz = imgsz
         self.use_slicer = slicer and _SV_AVAILABLE
 
         if slicer and not _SV_AVAILABLE:
-            print(
-                "[BallDetector] supervision not installed — falling back to single-pass "
-                "mode. Install with: pip install supervision"
+            logger.warning(
+                "supervision not installed — falling back to single-pass mode. "
+                "Install with: pip install supervision"
             )
 
         self._slicer = None

@@ -282,7 +282,7 @@ class RadarRenderer:
 
             # ID label
             if not is_ball:
-                tid = str(obj.get("id", obj.get("track_id", "")))
+                tid = str(obj.get("track_id", obj.get("id", "")))
                 font = cv2.FONT_HERSHEY_SIMPLEX
                 fscale, fthick = 0.38, 1
                 (tw, th), _ = cv2.getTextSize(tid, font, fscale, fthick)

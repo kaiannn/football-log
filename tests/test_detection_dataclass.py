@@ -8,7 +8,7 @@ from football_log.protocols import Detection
 def test_to_dict_has_documented_keys():
     det = Detection(track_id=3, bbox=(10, 20, 30, 40), label="Team A", conf=0.5)
     d = det.to_dict()
-    for k in ("id", "bbox", "label", "conf", "box_color", "world_x_m", "world_y_m"):
+    for k in ("track_id", "bbox", "label", "conf", "box_color", "world_x_m", "world_y_m"):
         assert k in d
 
 

@@ -35,10 +35,10 @@ else:
 
 
 
-from football_log.vision.label_utils import all_class_ids_from, bbox_too_small, coerce_ids
+from football_log.vision.label_utils import BaseDetector, bbox_too_small, coerce_ids
 
 
-class DeepSortTracker:
+class DeepSortTracker(BaseDetector):
     """Detector Protocol: YOLO detection + standalone DeepSORT association.
 
     Use: set_team_classifier(tc) then call detect(frame) → List[Detection].
@@ -79,6 +79,11 @@ class DeepSortTracker:
                 "Run: pip install 'deep-sort-realtime>=1.3'"
             ) from exc
 
+        super().__init__(
+            coerce_ids(player_class_ids), coerce_ids(ball_class_ids),
+            coerce_ids(referee_class_ids), coerce_ids(team_a_class_ids),
+            coerce_ids(team_b_class_ids),
+        )
         self.model = YOLO(model_name)
         self._conf = conf
         self._imgsz = imgsz
@@ -93,30 +98,12 @@ class DeepSortTracker:
             half=half,
             bgr=True,
         )
-        self.player_class_ids: Tuple[int, ...] = coerce_ids(player_class_ids)
-        self.ball_class_ids: Tuple[int, ...] = coerce_ids(ball_class_ids)
-        self.referee_class_ids: Tuple[int, ...] = coerce_ids(referee_class_ids)
-        self.team_a_class_ids: Tuple[int, ...] = coerce_ids(team_a_class_ids)
-        self.team_b_class_ids: Tuple[int, ...] = coerce_ids(team_b_class_ids)
-        self._team_classifier: Optional["TeamClassifierProto"] = None
-        self._all_class_ids: List[int] = all_class_ids_from(
-            self.player_class_ids, self.ball_class_ids,
-            self.referee_class_ids, self.team_a_class_ids, self.team_b_class_ids,
-        )
-
-    def set_team_classifier(self, tc: "TeamClassifierProto") -> None:
-        self._team_classifier = tc
-
-    @property
-    def all_class_ids(self) -> List[int]:
-        return self._all_class_ids
 
     # ------ Detector Protocol ------
 
     def detect(self, frame: np.ndarray) -> List["Detection"]:
         from football_log.protocols import Detection
 
-        # 1. YOLO detection only (no per-frame tracking state inside YOLO)
         results = self.model.predict(
             frame,
             conf=self._conf,
@@ -125,7 +112,6 @@ class DeepSortTracker:
             verbose=False,
         )
 
-        # 2. Convert to deep_sort_realtime input: [(ltrb, conf, cls), ...]
         raw_dets: list = []
         if results and results[0].boxes is not None and len(results[0].boxes) > 0:
             boxes = results[0].boxes
@@ -140,7 +126,6 @@ class DeepSortTracker:
                     int(clss[i]),
                 ))
 
-        # 3. Compute custom Re-ID embeddings if extractor provided
         embeds = None
         if self._reid_extractor is not None and raw_dets:
             embeds = []
@@ -151,10 +136,8 @@ class DeepSortTracker:
                 emb = self._reid_extractor.extract(frame, (x, y, w, h))
                 embeds.append(emb.astype(np.float32))
 
-        # 4. DeepSORT update: Kalman predict + Re-ID association
         tracks = self._tracker.update_tracks(raw_dets, frame=frame, embeds=embeds)
 
-        # 4. Build Detection list from confirmed tracks
         detections: List[Detection] = []
         for track in tracks:
             if not track.is_confirmed():
@@ -177,18 +160,3 @@ class DeepSortTracker:
                 box_color=color,
             ))
         return detections
-
-    def _assign_label(
-        self,
-        obj_cls: int,
-        frame: np.ndarray,
-        bbox: Tuple[int, int, int, int],
-        track_id: int,
-    ) -> Tuple[str, Optional[Tuple[int, int, int]]]:
-        from football_log.vision.label_utils import assign_label as _al
-        return _al(
-            obj_cls, frame, bbox, track_id,
-            self.ball_class_ids, self.referee_class_ids,
-            self.team_a_class_ids, self.team_b_class_ids,
-            self._team_classifier,
-        )

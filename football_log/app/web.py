@@ -1,5 +1,6 @@
 """Gradio Web UI — 视频文件处理 + 实时摄像头两种模式。"""
 
+import logging
 import os
 import tempfile
 import threading
@@ -8,23 +9,20 @@ from typing import Optional
 import cv2
 import gradio as gr
 
+logger = logging.getLogger(__name__)
+
 from football_log.app.runner import PipelineConfig, VideoTrackerPipeline
+from football_log.config import BALL_WEIGHTS, DEFAULT_MODEL, MODULE1_CLASS_IDS, MODULE1_WEIGHTS, PITCH_KP_WEIGHTS
 from football_log.vision.label_utils import parse_team_colors
 from football_log.world.pitch_model import PitchSpec
 
 
-_MODULE1_WEIGHTS = "runs/module1_v1/weights/best.pt"
-_MODULE1_CLASS_IDS = {"player": [0], "ball": [1], "referee": [2]}
-_PITCH_KP_WEIGHTS = "runs/roboflow/football-pitch-detection.pt"
-_BALL_WEIGHTS = "runs/roboflow/football-ball-detection.pt"
-
 _COCO_MODELS = ["yolov8n.pt", "yolov8s.pt", "yolov8m.pt", "yolov8l.pt", "yolov8x.pt"]
 _MODELS = (
-    [_MODULE1_WEIGHTS] + _COCO_MODELS
-    if os.path.isfile(_MODULE1_WEIGHTS)
+    [MODULE1_WEIGHTS] + _COCO_MODELS
+    if os.path.isfile(MODULE1_WEIGHTS)
     else _COCO_MODELS
 )
-_DEFAULT_MODEL = _MODULE1_WEIGHTS if os.path.isfile(_MODULE1_WEIGHTS) else "yolov8n.pt"
 _TRACKERS = ["bytetrack.yaml", "botsort.yaml"]
 _FORMATS = ["both", "jsonl", "csv"]
 
@@ -48,9 +46,7 @@ def _build_pipeline(
     output_format: str,
     pitch_length: float,
     pitch_width: float,
-    pitch_field_detect: bool,
-    pitch_field_every_n: int,
-    pitch_field_filter: bool,
+    keypoint_every_n: int,
     team_colors_text: str,
     homography_file,
     camera_calib_file,
@@ -61,7 +57,7 @@ def _build_pipeline(
     pitch = PitchSpec(length_m=pitch_length, width_m=pitch_width)
     pitch.validate()
     output_dir = tempfile.mkdtemp(prefix="football_log_")
-    ids = _MODULE1_CLASS_IDS if model == _MODULE1_WEIGHTS else {}
+    ids = MODULE1_CLASS_IDS if model == MODULE1_WEIGHTS else {}
     return VideoTrackerPipeline(
         PipelineConfig(
             video_path=video_source,
@@ -76,9 +72,7 @@ def _build_pipeline(
             homography_path=_resolve_file_path(homography_file),
             camera_calib_path=_resolve_file_path(camera_calib_file),
             pitch=pitch,
-            pitch_field_detect=pitch_field_detect,
-            pitch_field_every_n=int(pitch_field_every_n),
-            pitch_field_filter_tracks=pitch_field_filter,
+            keypoint_every_n=int(keypoint_every_n),
             team_colors=parse_team_colors(team_colors_text),
             player_class_ids=ids.get("player"),
             ball_class_ids=ids.get("ball"),
@@ -110,7 +104,7 @@ def _collect_output_files(output_dir: str):
 def _run_video_streaming(
     video_path, model, tracker, conf, imgsz, detect_every_n,
     output_format, pitch_length, pitch_width,
-    pitch_field_detect, pitch_field_every_n, pitch_field_filter,
+    keypoint_every_n,
     team_colors_text, homography_file, camera_calib_file,
     pitch_kp_enable, pitch_keypoint_model, ball_enable, ball_model, ball_slicer,
 ):
@@ -128,14 +122,14 @@ def _run_video_streaming(
         video_path = video_path.name
     if not video_path:
         raise gr.Error("无法解析视频路径，请重新上传")
-    print(f"[web] video_path resolved → {video_path!r}")
+    logger.info("video_path resolved → %r", video_path)
     if not os.path.exists(str(video_path)):
         raise gr.Error(f"视频文件不存在: {video_path}")
 
     pipeline = _build_pipeline(
         video_path, model, tracker, conf, imgsz, detect_every_n,
         output_format, pitch_length, pitch_width,
-        pitch_field_detect, pitch_field_every_n, pitch_field_filter,
+        keypoint_every_n,
         team_colors_text, homography_file, camera_calib_file,
         pitch_keypoint_model if pitch_kp_enable else None,
         ball_model if ball_enable else None,
@@ -172,7 +166,7 @@ def _run_video_streaming(
 def _run_camera_streaming(
     cam_device, model, tracker, conf, imgsz, detect_every_n,
     output_format, pitch_length, pitch_width,
-    pitch_field_detect, pitch_field_every_n, pitch_field_filter,
+    keypoint_every_n,
     team_colors_text, homography_file, camera_calib_file,
     pitch_kp_enable, pitch_keypoint_model, ball_enable, ball_model, ball_slicer,
 ):
@@ -182,7 +176,7 @@ def _run_camera_streaming(
     pipeline = _build_pipeline(
         cam_source, model, tracker, conf, imgsz, detect_every_n,
         output_format, pitch_length, pitch_width,
-        pitch_field_detect, pitch_field_every_n, pitch_field_filter,
+        keypoint_every_n,
         team_colors_text, homography_file, camera_calib_file,
         pitch_keypoint_model if pitch_kp_enable else None,
         ball_model if ball_enable else None,
@@ -234,7 +228,7 @@ def build_ui() -> gr.Blocks:
                 stop_btn = gr.Button("停止", variant="stop", size="lg")
 
                 gr.Markdown("### 检测参数")
-                model = gr.Dropdown(_MODELS, value=_DEFAULT_MODEL, label="YOLO 模型")
+                model = gr.Dropdown(_MODELS, value=DEFAULT_MODEL, label="YOLO 模型")
                 tracker = gr.Dropdown(_TRACKERS, value="bytetrack.yaml", label="跟踪器")
                 conf = gr.Slider(0.1, 0.9, value=0.3, step=0.05, label="置信度阈值")
                 imgsz = gr.Slider(320, 1280, value=640, step=32, label="推理尺寸")
@@ -246,9 +240,7 @@ def build_ui() -> gr.Blocks:
                 with gr.Accordion("场地参数", open=False):
                     pitch_length = gr.Number(value=105.0, label="球场长度 (m)")
                     pitch_width = gr.Number(value=68.0, label="球场宽度 (m)")
-                    pitch_field_detect = gr.Checkbox(value=False, label="场地检测")
-                    pitch_field_every_n = gr.Slider(1, 60, value=15, step=1, label="场地检测间隔帧数")
-                    pitch_field_filter = gr.Checkbox(value=False, label="草皮掩膜过滤")
+                    keypoint_every_n = gr.Slider(1, 60, value=15, step=1, label="关键点检测间隔帧数")
 
                 with gr.Accordion("分队与标定", open=False):
                     team_colors_text = gr.Textbox(
@@ -259,8 +251,8 @@ def build_ui() -> gr.Blocks:
                     camera_calib_file = gr.File(label="针孔标定 JSON/YAML", file_types=[".json", ".yaml", ".yml"])
 
                 with gr.Accordion("增强模型 (可选)", open=True):
-                    _kp_found = os.path.isfile(_PITCH_KP_WEIGHTS)
-                    _ball_found = os.path.isfile(_BALL_WEIGHTS)
+                    _kp_found = os.path.isfile(PITCH_KP_WEIGHTS)
+                    _ball_found = os.path.isfile(BALL_WEIGHTS)
                     gr.Markdown(
                         "勾选启用对应模型。权重已自动检测，也可手动填写路径。\n"
                         "- **场地关键点**：提升雷达精度和世界坐标准确性\n"
@@ -273,7 +265,7 @@ def build_ui() -> gr.Blocks:
                         )
                         pitch_keypoint_model = gr.Textbox(
                             label="路径",
-                            value=_PITCH_KP_WEIGHTS if _kp_found else "",
+                            value=PITCH_KP_WEIGHTS if _kp_found else "",
                             placeholder="runs/roboflow/football-pitch-detection.pt",
                             scale=3,
                         )
@@ -284,7 +276,7 @@ def build_ui() -> gr.Blocks:
                         )
                         ball_model = gr.Textbox(
                             label="路径",
-                            value=_BALL_WEIGHTS if _ball_found else "",
+                            value=BALL_WEIGHTS if _ball_found else "",
                             placeholder="runs/roboflow/football-ball-detection.pt",
                             scale=3,
                         )
@@ -305,7 +297,7 @@ def build_ui() -> gr.Blocks:
         shared_params = [
             model, tracker, conf, imgsz, detect_every_n,
             output_format, pitch_length, pitch_width,
-            pitch_field_detect, pitch_field_every_n, pitch_field_filter,
+            keypoint_every_n,
             team_colors_text, homography_file, camera_calib_file,
             pitch_kp_enable, pitch_keypoint_model, ball_enable, ball_model, ball_slicer,
         ]

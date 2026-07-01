@@ -21,7 +21,7 @@ from typing import List, Optional, Tuple
 import cv2
 import numpy as np
 
-from football_log.world.homography import Homography, bbox_foot_point
+from football_log.world.homography import Homography
 from football_log.world.auto_calibration import (
     AutoCalibrationProjector,
     HomographySmoother,
@@ -71,10 +71,13 @@ def check_physics(H: Homography, detections_path: str, fps: float) -> dict:
 
     records = []
     with open(detections_path, "r") as f:
-        for line in f:
+        for line_no, line in enumerate(f, 1):
             line = line.strip()
             if line:
-                records.append(json.loads(line))
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError as exc:
+                    return {"error": f"JSON parse error at line {line_no}: {exc}"}
 
     if not records:
         return {"error": "no records"}
@@ -86,8 +89,9 @@ def check_physics(H: Homography, detections_path: str, fps: float) -> dict:
         tid = r.get("track_id", -1)
         wx = r.get("world_x_m")
         wy = r.get("world_y_m")
-        if wx is not None and wy is not None:
-            tracks[tid].append((r["frame_idx"], float(wx), float(wy)))
+        frame_idx = r.get("frame_idx")
+        if wx is not None and wy is not None and frame_idx is not None:
+            tracks[tid].append((int(frame_idx), float(wx), float(wy)))
 
     violations = []
     speeds = []

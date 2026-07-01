@@ -133,7 +133,6 @@ def evaluate_team_classifier(
 
             if is_correct:
                 correct += 1
-            total += 1
 
             if total <= 50:
                 warmup_total += 1

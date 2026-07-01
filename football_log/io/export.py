@@ -94,7 +94,7 @@ class TrackingDataWriter:
         row = {
             "frame_idx": int(frame_idx),
             "timestamp_sec": timestamp_sec,
-            "track_id": int(obj.get("id", obj.get("track_id", -1))),
+            "track_id": int(obj.get("track_id", obj.get("id", -1))),
             "label": obj.get("label", ""),
             "x": x,
             "y": y,

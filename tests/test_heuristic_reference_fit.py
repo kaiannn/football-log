@@ -11,7 +11,6 @@ from football_log.world.heuristic_reference_fit import (
     _mean_edge_lengths,
     _order_tl_tr_br_bl,
     apply_scales_to_homography,
-    fit_reference_scales,
     fit_reference_scales_multi,
 )
 
@@ -68,40 +67,6 @@ def test_loss_cauchy_bounded():
 def test_loss_zero_residual():
     assert _loss_from_residual(0.0, robust_loss="huber", delta=1.0) == 0.0
     assert _loss_from_residual(0.0, robust_loss="cauchy", delta=1.0) == 0.0
-
-
-# ---- fit_reference_scales (single ref) ----------------------------------------
-
-
-def test_fit_identity_projector_recovers_scale():
-    """With an identity projector (pixel == world), scale should converge near 1.0."""
-    def identity_projector(u, v):
-        return (u, v)
-
-    ref = ReferenceRectangle(
-        image_points_xy=np.array([[0, 0], [100, 0], [100, 50], [0, 50]], dtype=np.float64),
-        width_m=100.0,
-        length_m=50.0,
-    )
-    result = fit_reference_scales(identity_projector, ref, steps=15)
-    assert abs(result.scale_x - 1.0) < 0.1
-    assert abs(result.scale_y - 1.0) < 0.1
-    assert result.rmse_m < 5.0
-
-
-def test_fit_with_scaled_projector():
-    """If projector returns half the world coords, scale should compensate."""
-    def half_projector(u, v):
-        return (u * 0.5, v * 0.5)
-
-    ref = ReferenceRectangle(
-        image_points_xy=np.array([[0, 0], [100, 0], [100, 50], [0, 50]], dtype=np.float64),
-        width_m=100.0,
-        length_m=50.0,
-    )
-    result = fit_reference_scales(half_projector, ref, steps=20)
-    assert abs(result.scale_x - 2.0) < 0.3
-    assert abs(result.scale_y - 2.0) < 0.3
 
 
 # ---- fit_reference_scales_multi -----------------------------------------------

@@ -5,10 +5,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from football_log.vision.label_utils import bbox_foot_point
 from football_log.world.homography import (
     Homography,
     HomographyProjector,
-    bbox_foot_point,
     project_foot_to_world,
 )
 

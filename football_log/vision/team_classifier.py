@@ -9,16 +9,20 @@
 可选覆盖：通过 team_colors 传入两队 BGR 颜色，跳过自动聚类。
 """
 
+import logging
 from collections import defaultdict, deque
 from typing import Deque, Dict, List, Optional, Tuple
 
 import cv2
+
+logger = logging.getLogger(__name__)
 import numpy as np
 
 from football_log.vision.label_utils import (
     _extract_jersey_patch,
     _grass_mask,
     get_dominant_color,
+    try_fit_kmeans,
 )
 
 _MIN_NON_GRASS_RATIO = 0.15
@@ -74,24 +78,18 @@ class TeamClassifier:
         return self._fitted
 
     def _try_fit(self) -> None:
-        if self._fitted or len(self._samples) < self._min_samples:
+        if self._fitted:
             return
-        data = np.vstack(self._samples).astype(np.float32)
-        criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_MAX_ITER, 100, 0.2)
-        _, labels, centers = cv2.kmeans(
-            data, 2, None, criteria, 20, cv2.KMEANS_PP_CENTERS,
-        )
-        dist = float(np.linalg.norm(centers[0] - centers[1]))
-        if dist < 15.0:
-            print(f"[TeamClassifier] 聚类中心距离过近 ({dist:.1f})，延长采样")
+        centers = try_fit_kmeans(self._samples, self._min_samples, 15.0)
+        if centers is None:
             return
         self._centers = centers
         self._fitted = True
-        print(
-            f"[TeamClassifier] K-Means 完成: "
-            f"A HS=({centers[0][0]:.0f},{centers[0][1]:.0f}), "
-            f"B HS=({centers[1][0]:.0f},{centers[1][1]:.0f}), "
-            f"距离={dist:.1f}, 样本={len(self._samples)}"
+        dist = float(np.linalg.norm(centers[0] - centers[1]))
+        logger.info(
+            "K-Means done: A HS=(%.0f,%.0f), B HS=(%.0f,%.0f), dist=%.1f, samples=%d",
+            centers[0][0], centers[0][1], centers[1][0], centers[1][1],
+            dist, len(self._samples),
         )
 
     def _classify(self, feat: np.ndarray) -> str:

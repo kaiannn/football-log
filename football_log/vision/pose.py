@@ -79,7 +79,8 @@ class PoseEstimator:
     def __init__(self, model_name: str = "yolov8n-pose.pt", conf: float = 0.25, imgsz: int = 640):
         if YOLO is None:
             raise RuntimeError(
-                "未安装 ultralytics，无法启用 keypoint 分队器：pip install ultralytics"
+                "ultralytics not installed, cannot enable keypoint team classifier: "
+                "pip install ultralytics"
             ) from _import_error
         self.model = YOLO(model_name)
         self.conf = conf

@@ -3,20 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Iterable, List, Literal, Sequence, Tuple
+from typing import Callable, List, Literal, Sequence, Tuple
 
 import numpy as np
 
-
-def _order_tl_tr_br_bl(pts: np.ndarray) -> np.ndarray:
-    p = np.asarray(pts, dtype=np.float64).reshape(4, 2)
-    s = p.sum(axis=1)
-    d = np.diff(p, axis=1).reshape(-1)
-    tl = p[np.argmin(s)]
-    br = p[np.argmax(s)]
-    tr = p[np.argmin(d)]
-    bl = p[np.argmax(d)]
-    return np.array([tl, tr, br, bl], dtype=np.float64)
+from football_log.vision.label_utils import sort_quad_tl_tr_br_bl as _order_tl_tr_br_bl
 
 
 @dataclass(frozen=True)
@@ -29,15 +20,6 @@ class ReferenceRectangle:
 
     def ordered(self) -> np.ndarray:
         return _order_tl_tr_br_bl(self.image_points_xy)
-
-
-@dataclass(frozen=True)
-class ScaleFitResult:
-    scale_x: float
-    scale_y: float
-    width_err_m: float
-    length_err_m: float
-    rmse_m: float
 
 
 @dataclass(frozen=True)
@@ -57,39 +39,6 @@ def _mean_edge_lengths(world_quad: np.ndarray) -> Tuple[float, float]:
     width = 0.5 * (top + bottom)
     length = 0.5 * (right + left)
     return float(width), float(length)
-
-
-def fit_reference_scales(
-    projector: Callable[[float, float], Tuple[float, float]],
-    ref: ReferenceRectangle,
-    *,
-    steps: int = 10,
-) -> ScaleFitResult:
-    """
-    用坐标下降拟合各向异性尺度 (sx, sy)，使投影后标定物尺寸贴近真实值。
-
-    projector: 像素 -> 世界 (x, y) 的函数（可来自 Homography 或 Pinhole）。
-
-    单标定物兼容入口；内部复用多参考拟合。
-    """
-    multi = fit_reference_scales_multi(
-        projector,
-        [ref],
-        steps=steps,
-        robust_loss="none",
-    )
-    q_img = ref.ordered()
-    q_w = np.array([projector(float(u), float(v)) for u, v in q_img], dtype=np.float64)
-    q_w[:, 0] *= multi.scale_x
-    q_w[:, 1] *= multi.scale_y
-    w_hat, l_hat = _mean_edge_lengths(q_w)
-    return ScaleFitResult(
-        scale_x=multi.scale_x,
-        scale_y=multi.scale_y,
-        width_err_m=float(w_hat - ref.width_m),
-        length_err_m=float(l_hat - ref.length_m),
-        rmse_m=multi.rmse_m,
-    )
 
 
 def _loss_from_residual(

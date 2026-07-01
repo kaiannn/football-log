@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
-from typing import Any, Deque, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Deque, Dict, Iterable, List, Optional, Sequence, Tuple, TYPE_CHECKING
 
 import cv2
 import numpy as np
+
+if TYPE_CHECKING:
+    from football_log.protocols import TeamClassifierProto
 
 # ---------------------------------------------------------------------------
 # get_dominant_color — jersey colour extraction (moved from team_classifier)
@@ -99,7 +102,7 @@ def assign_label(
     referee_class_ids: Tuple[int, ...],
     team_a_class_ids: Tuple[int, ...],
     team_b_class_ids: Tuple[int, ...],
-    team_classifier: Optional[Any] = None,
+    team_classifier: Optional["TeamClassifierProto"] = None,
 ) -> Tuple[str, Optional[Tuple[int, int, int]]]:
     """Route a detection class ID to a label + dominant color.
 
@@ -172,3 +175,105 @@ def all_class_ids_from(
 def bbox_too_small(bbox: Tuple[int, int, int, int], min_side: int = 2) -> bool:
     """Return True if bbox width or height is below min_side pixels."""
     return bbox[2] < min_side or bbox[3] < min_side
+
+
+class BaseDetector:
+    """Tracker 公共逻辑 mixin：class ID 管理、team classifier 注入、标签分配。"""
+
+    def __init__(
+        self,
+        player_class_ids: Tuple[int, ...],
+        ball_class_ids: Tuple[int, ...],
+        referee_class_ids: Tuple[int, ...],
+        team_a_class_ids: Tuple[int, ...],
+        team_b_class_ids: Tuple[int, ...],
+    ) -> None:
+        self.player_class_ids = player_class_ids
+        self.ball_class_ids = ball_class_ids
+        self.referee_class_ids = referee_class_ids
+        self.team_a_class_ids = team_a_class_ids
+        self.team_b_class_ids = team_b_class_ids
+        self._team_classifier: Optional["TeamClassifierProto"] = None
+        self._all_class_ids: List[int] = all_class_ids_from(
+            player_class_ids, ball_class_ids,
+            referee_class_ids, team_a_class_ids, team_b_class_ids,
+        )
+
+    def set_team_classifier(self, tc: "TeamClassifierProto") -> None:
+        self._team_classifier = tc
+
+    @property
+    def all_class_ids(self) -> List[int]:
+        return self._all_class_ids
+
+    def _assign_label(
+        self,
+        obj_cls: int,
+        frame: np.ndarray,
+        bbox: Tuple[int, int, int, int],
+        track_id: int,
+    ) -> Tuple[str, Optional[Tuple[int, int, int]]]:
+        return assign_label(
+            obj_cls, frame, bbox, track_id,
+            self.ball_class_ids, self.referee_class_ids,
+            self.team_a_class_ids, self.team_b_class_ids,
+            self._team_classifier,
+        )
+
+
+# ---------------------------------------------------------------------------
+# bbox_foot_point / is_person_label / bbox_anchor — shared anchor geometry
+# ---------------------------------------------------------------------------
+
+
+def bbox_foot_point(bbox: Tuple[float, float, float, float]) -> Tuple[float, float]:
+    """从 bbox (x, y, w, h) 取「脚底」近似：底边中点。"""
+    x, y, w, h = bbox
+    return float(x + 0.5 * w), float(y + h)
+
+
+def is_person_label(label: str) -> bool:
+    return "Player" in label or "Team" in label
+
+
+def bbox_anchor(bbox: Tuple[float, float, float, float], label: str) -> Tuple[float, float]:
+    """统一锚点约定：球员用脚底中点，球用 bbox 中心。"""
+    if is_person_label(label):
+        return bbox_foot_point(bbox)
+    return float(bbox[0] + 0.5 * bbox[2]), float(bbox[1] + 0.5 * bbox[3])
+
+
+# ---------------------------------------------------------------------------
+# sort_quad_tl_tr_br_bl — shared quadrilateral ordering
+# ---------------------------------------------------------------------------
+
+
+def try_fit_kmeans(
+    samples: List[np.ndarray],
+    min_samples: int,
+    distance_threshold: float,
+) -> Optional[np.ndarray]:
+    """尝试用 K-Means 聚类两类颜色特征。成功返回 centers (2, C)，失败返回 None。"""
+    if len(samples) < min_samples:
+        return None
+    data = np.vstack(samples).astype(np.float32)
+    criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_MAX_ITER, 100, 0.2)
+    _, _, centers = cv2.kmeans(data, 2, None, criteria, 20, cv2.KMEANS_PP_CENTERS)
+    dist = float(np.linalg.norm(centers[0] - centers[1]))
+    if dist < distance_threshold:
+        return None
+    return centers
+
+
+def sort_quad_tl_tr_br_bl(points: np.ndarray) -> np.ndarray:
+    """四点排序：左上→右上→右下→左下（透视四边形常用 sum/diff 规则）。"""
+    pts = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+    if len(pts) != 4:
+        return pts
+    s = pts.sum(axis=1)
+    d = np.diff(pts, axis=1).flatten()
+    tl = pts[np.argmin(s)]
+    br = pts[np.argmax(s)]
+    tr = pts[np.argmin(d)]
+    bl = pts[np.argmax(d)]
+    return np.array([tl, tr, br, bl], dtype=np.float64)

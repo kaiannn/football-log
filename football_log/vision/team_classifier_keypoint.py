@@ -30,12 +30,16 @@ is actually used.
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict, deque
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Deque, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
 
+logger = logging.getLogger(__name__)
+
+from football_log.vision.label_utils import try_fit_kmeans
 from football_log.vision.pose import (
     PoseEstimator,
     TorsoKeypoints,
@@ -71,9 +75,20 @@ def _sample_pixels_in_quad(
     fewer than 5 valid (sufficiently chromatic) pixels.
     """
     fh, fw = frame.shape[:2]
-    mask = np.zeros((fh, fw), dtype=np.uint8)
-    cv2.fillPoly(mask, [quad], 255)
-    ys, xs = np.nonzero(mask)
+    x_min = max(0, int(quad[:, 0].min()))
+    x_max = min(fw, int(quad[:, 0].max()) + 1)
+    y_min = max(0, int(quad[:, 1].min()))
+    y_max = min(fh, int(quad[:, 1].max()) + 1)
+    if x_max <= x_min or y_max <= y_min:
+        return None
+    local_quad = quad.copy()
+    local_quad[:, 0] -= x_min
+    local_quad[:, 1] -= y_min
+    mask = np.zeros((y_max - y_min, x_max - x_min), dtype=np.uint8)
+    cv2.fillPoly(mask, [local_quad], 255)
+    local_ys, local_xs = np.nonzero(mask)
+    ys = local_ys + y_min
+    xs = local_xs + x_min
     if len(ys) < 5:
         return None
     if len(ys) > n_samples:
@@ -122,14 +137,14 @@ class KeypointTeamClassifier:
 
     def __init__(
         self,
-        pose_estimator: Optional[Any] = None,
+        pose_estimator: Optional[PoseEstimator] = None,
         history_len: int = DEFAULT_HISTORY_LEN,
         warmup_frames: int = DEFAULT_WARMUP_FRAMES,
         min_samples: int = DEFAULT_MIN_SAMPLES,
         num_pixel_samples: int = DEFAULT_NUM_SAMPLES,
         team_colors: Optional[List[Tuple[int, int, int]]] = None,
     ):
-        self._pose: Optional[Any] = pose_estimator  # lazily constructed if None
+        self._pose: Optional[PoseEstimator] = pose_estimator  # lazily constructed if None
         self._frame_pose_results: List[Tuple[Tuple[int, int, int, int], TorsoKeypoints]] = []
         self._cached_frame_id: int = -1
 
@@ -151,7 +166,7 @@ class KeypointTeamClassifier:
 
     # ------ lazy pose model ------
 
-    def _ensure_pose(self) -> Any:
+    def _ensure_pose(self) -> PoseEstimator:
         if self._pose is None:
             self._pose = PoseEstimator()
         return self._pose
@@ -204,27 +219,22 @@ class KeypointTeamClassifier:
     # ------ internals ------
 
     def _try_fit(self) -> None:
-        if self._fitted or len(self._samples) < self._min_samples:
+        if self._fitted:
             return
-        data = np.vstack(self._samples).astype(np.float32)
-        criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_MAX_ITER, 100, 0.2)
-        _, _, centers = cv2.kmeans(
-            data, 2, None, criteria, 20, cv2.KMEANS_PP_CENTERS,
-        )
-        # In LAB, two kits should differ by at least ~12 units in the (L, a, b)
-        # space to be confidently separable. Less and we're probably looking
-        # at noise on a single-kit sample (pre-kickoff warm-up?).
+        centers = try_fit_kmeans(self._samples, self._min_samples, 12.0)
+        if centers is None:
+            return
         dist = float(np.linalg.norm(centers[0] - centers[1]))
         if dist < 12.0:
-            print(f"[KeypointTeamClassifier] LAB cluster distance too small ({dist:.1f}); extending warmup")
+            logger.info("LAB cluster distance too small (%.1f); extending warmup", dist)
             return
         self._centers = centers.astype(np.float32)
         self._fitted = True
-        print(
-            f"[KeypointTeamClassifier] LAB K-Means fitted: "
-            f"A=({centers[0, 0]:.0f},{centers[0, 1]:.0f},{centers[0, 2]:.0f}), "
-            f"B=({centers[1, 0]:.0f},{centers[1, 1]:.0f},{centers[1, 2]:.0f}), "
-            f"distance={dist:.1f}, samples={len(self._samples)}"
+        logger.info(
+            "LAB K-Means fitted: A=(%.0f,%.0f,%.0f), B=(%.0f,%.0f,%.0f), dist=%.1f, samples=%d",
+            centers[0, 0], centers[0, 1], centers[0, 2],
+            centers[1, 0], centers[1, 1], centers[1, 2],
+            dist, len(self._samples),
         )
 
     @property

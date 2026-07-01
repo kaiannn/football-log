@@ -24,12 +24,12 @@ except ImportError as exc:
 else:
     _import_error = None
 
-from football_log.vision.label_utils import all_class_ids_from, bbox_too_small, coerce_ids
+from football_log.vision.label_utils import BaseDetector, bbox_too_small, coerce_ids
 from football_log.vision.team_classifier import TeamClassifier
 from football_log.vision.tracker_registry import resolve_tracker
 
 
-class YoloByteTrackTracker:
+class YoloByteTrackTracker(BaseDetector):
     """Detector 协议实现：YOLO 检测 + ByteTrack/BoT-SORT 跟踪。
 
     使用：先 set_team_classifier(tc) 注入分队器，再调用 detect(frame) → List[Detection]。
@@ -49,27 +49,15 @@ class YoloByteTrackTracker:
     ):
         if YOLO is None:
             raise RuntimeError("未安装 ultralytics，请先执行: pip install ultralytics") from _import_error
+        super().__init__(
+            coerce_ids(player_class_ids), coerce_ids(ball_class_ids),
+            coerce_ids(referee_class_ids), coerce_ids(team_a_class_ids),
+            coerce_ids(team_b_class_ids),
+        )
         self.model = YOLO(model_name)
         self.conf = conf
         self.imgsz = imgsz
         self.tracker = resolve_tracker(tracker)
-        self.player_class_ids: Tuple[int, ...] = coerce_ids(player_class_ids)
-        self.ball_class_ids: Tuple[int, ...] = coerce_ids(ball_class_ids)
-        self.referee_class_ids: Tuple[int, ...] = coerce_ids(referee_class_ids)
-        self.team_a_class_ids: Tuple[int, ...] = coerce_ids(team_a_class_ids)
-        self.team_b_class_ids: Tuple[int, ...] = coerce_ids(team_b_class_ids)
-        self._team_classifier: Optional["TeamClassifierProto"] = None
-        self._all_class_ids: List[int] = all_class_ids_from(
-            self.player_class_ids, self.ball_class_ids,
-            self.referee_class_ids, self.team_a_class_ids, self.team_b_class_ids,
-        )
-
-    def set_team_classifier(self, tc: "TeamClassifierProto") -> None:
-        self._team_classifier = tc
-
-    @property
-    def all_class_ids(self) -> List[int]:
-        return self._all_class_ids
 
     # ------ Detector Protocol ------
 
@@ -90,21 +78,6 @@ class YoloByteTrackTracker:
                 box_color=box_color,
             ))
         return results
-
-    def _assign_label(
-        self,
-        obj_cls: int,
-        frame: np.ndarray,
-        bbox: Tuple[int, int, int, int],
-        track_id: int,
-    ) -> Tuple[str, Optional[Tuple[int, int, int]]]:
-        from football_log.vision.label_utils import assign_label as _al
-        return _al(
-            obj_cls, frame, bbox, track_id,
-            self.ball_class_ids, self.referee_class_ids,
-            self.team_a_class_ids, self.team_b_class_ids,
-            self._team_classifier,
-        )
 
     # ------ 内部方法 ------
 

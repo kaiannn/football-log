@@ -7,6 +7,10 @@ from typing import Optional, Tuple
 
 import numpy as np
 
+from football_log.vision.label_utils import bbox_anchor, bbox_foot_point, is_person_label
+
+__all__ = ["Homography", "HomographyProjector", "project_foot_to_world"]
+
 
 @dataclass
 class Homography:
@@ -43,36 +47,17 @@ class Homography:
         return float(p[0] / p[2]), float(p[1] / p[2])
 
 
-def bbox_foot_point(bbox: Tuple[float, float, float, float]) -> Tuple[float, float]:
-    """
-    从 bbox (x, y, w, h) 取「脚底」近似：底边中点。
-    用于把球员投影到地面平面。
-    """
-    x, y, w, h = bbox
-    return float(x + 0.5 * w), float(y + h)
-
-
-def is_person_label(label: str) -> bool:
-    return "Player" in label or "Team" in label
-
-
 def project_foot_to_world(
     bbox: Tuple[float, float, float, float],
     label: str,
     H: Optional[Homography],
 ) -> Tuple[Optional[float], Optional[float]]:
-    """
-    若 label 为球员且 H 有效，返回脚底世界坐标；否则返回 (None, None)。
-    球可改用 bbox 中心，此处与业务约定一致时再扩展。
-    """
+    """若 label 为球员或球且 H 有效，返回锚点世界坐标；否则返回 (None, None)。"""
     if H is None:
         return None, None
     if not is_person_label(label) and label != "Ball":
         return None, None
-    u, v = bbox_foot_point(bbox) if is_person_label(label) else (
-        float(bbox[0] + 0.5 * bbox[2]),
-        float(bbox[1] + 0.5 * bbox[3]),
-    )
+    u, v = bbox_anchor(bbox, label)
     wx, wy = H.pixel_to_world(u, v)
     if np.isnan(wx) or np.isnan(wy):
         return None, None

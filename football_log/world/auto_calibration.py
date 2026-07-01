@@ -37,11 +37,8 @@ try:
 except ImportError:  # pragma: no cover - cv2 is a hard runtime dep
     cv2 = None  # type: ignore
 
-from football_log.world.homography import (
-    Homography,
-    bbox_foot_point,
-    is_person_label,
-)
+from football_log.vision.label_utils import bbox_anchor, is_person_label
+from football_log.world.homography import Homography
 
 
 # ---- keyframe loader -----------------------------------------------------------
@@ -80,19 +77,30 @@ def load_keyframes_json(path: Path) -> List[Keyframe]:
           ]
         }
     """
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path}: invalid JSON: {exc}") from exc
     raw_keyframes = data.get("keyframes")
     if not isinstance(raw_keyframes, list) or not raw_keyframes:
         raise ValueError(f"{path}: 'keyframes' must be a non-empty list")
 
     out: List[Keyframe] = []
     for kf in raw_keyframes:
-        frame_idx = int(kf["frame_idx"])
+        frame_idx_raw = kf.get("frame_idx")
+        if frame_idx_raw is None:
+            raise ValueError(f"{path}: keyframe missing 'frame_idx'")
+        frame_idx = int(frame_idx_raw)
         points = kf.get("points", [])
         if len(points) < 4:
             raise ValueError(
                 f"{path}: keyframe at frame {frame_idx} has {len(points)} points; need >= 4"
             )
+        for i, p in enumerate(points):
+            if "image_uv" not in p:
+                raise ValueError(f"{path}: keyframe {frame_idx} point {i} missing 'image_uv'")
+            if "world_xy_m" not in p:
+                raise ValueError(f"{path}: keyframe {frame_idx} point {i} missing 'world_xy_m'")
         image_pts = np.array([p["image_uv"] for p in points], dtype=np.float32)
         world_pts = np.array([p["world_xy_m"] for p in points], dtype=np.float32)
         names = [str(p.get("name", f"pt{i}")) for i, p in enumerate(points)]
@@ -324,11 +332,7 @@ class AutoCalibrationProjector:
             return None, None
         if not is_person_label(label) and label != "Ball":
             return None, None
-        if is_person_label(label):
-            u, v = bbox_foot_point(bbox)
-        else:
-            u = float(bbox[0] + 0.5 * bbox[2])
-            v = float(bbox[1] + 0.5 * bbox[3])
+        u, v = bbox_anchor(bbox, label)
         wx, wy = self._current_H.pixel_to_world(u, v)
         if np.isnan(wx) or np.isnan(wy):
             return None, None

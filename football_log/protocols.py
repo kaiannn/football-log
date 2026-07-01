@@ -44,7 +44,7 @@ class Detection:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "id": self.track_id,
+            "track_id": self.track_id,
             "bbox": self.bbox,
             "label": self.label,
             "conf": self.conf,
@@ -59,7 +59,7 @@ class Detection:
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> Detection:
         return cls(
-            track_id=int(d.get("id", -1)),
+            track_id=int(d.get("track_id", d.get("id", -1))),
             bbox=tuple(d["bbox"]),  # type: ignore[arg-type]
             label=str(d.get("label", "")),
             conf=float(d.get("conf", 0.0)),
